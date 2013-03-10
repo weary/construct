@@ -357,9 +357,12 @@ class Channel(object):
 
 	def remove_user(self, user):
 		assert self.registered
+		if not user in self.users:
+			log.warn("User %s not on channel %s, cannot remove" % (user.nick, self.name))
 		log.debug("%s removed %s" % (self.name, user.nick))
 		self.send("KICK %s %s :Restricted Channel" % (self.name, user.nick))
-		self.users.discard(user)
+		# FIXME: need temporary ban here, to prevent auto-rejoin
+		del self.users[user]
 
 	def send(self, msg):
 		self.parent.construct.send(msg)
@@ -1067,7 +1070,7 @@ class Construct(object):
 		Allow <nick> on <chan> (if policy is set to deny)
 		or ban <nick> from <chan> (if policy is set to accept)
 		or make <nick> a channel operator on <chan>"""
-		r = re.match(args, "\s*(\S*)\s+(ban|allow|oper)\s*$", args)
+		r = re.match("\s*(\S*)\s+(ban|allow|oper)\s*$", args)
 		if not r:
 			raise IrcMsgException(oper, "Argument error, need nick and 'ban', 'allow' or 'oper'")
 		nick, newrole = r.groups()
@@ -1112,10 +1115,23 @@ class Construct(object):
 		chan.set_allow_guests(oper, allow)
 		chan.fix_all_users()
 
-	def cmd_chan_policy(self, user, chan, args):
-		pass
+	@needs_channel
+	def cmd_policy(self, oper, chan, cmd, args):
+		""" chanoper
+		policy <chan> allow|deny
+		Are users without explicit role in the channel allowed or kept out """
+		allowstr = args.strip().lower()
+		if allowstr not in ("allow", "deny"):
+			raise IrcMsgException(oper, "please use 'allow' or 'deny'. not '%s'" % allowstr)
 
-	def cmd_profiles(self, user, args):
+		chan.set_policy(oper, allowstr)
+		chan.fix_all_users()
+
+	@no_leftover_arguments
+	def cmd_profiles(self, user, cmd):
+		""" oper
+		profiles
+		Show registered profiles """
 		for prof in self.server.get_all_profiles():
 			user = self.server.get_user_for_profile(profile)
 			if user:
@@ -1127,7 +1143,11 @@ class Construct(object):
 			level = level_as_text(prof.level)
 			self.notice(user, "- %s %s (%s)" % (nick, level, online))
 
-	def cmd_channels(self, user, args):
+	@no_leftover_arguments
+	def cmd_channels(self, user, cmd):
+		""" oper
+		channels
+		Show known channels """
 		channels = self.server.get_all_channels()
 		if not channels:
 			raise IrcMsgException(user, "No channels found!")
