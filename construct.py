@@ -8,6 +8,9 @@ import traceback
 from functools import wraps
 log = logging.getLogger('construct')
 
+# FIXME: Should keep profiles/roles in database
+# FIXME: Think of a secure way to keep user-registrations acros restarts
+
 # for profile's
 guestlevel = object()
 registeredlevel = object()
@@ -297,6 +300,7 @@ class Channel(object):
 			self.name, user.nick, ', '.join(u.nick for u in self.users)))
 
 		self.fix_user_to_role(user)
+		# FIXME: tell user he should identify or register
 
 	def part(self, user):
 		if not user in self.users:
@@ -543,6 +547,7 @@ class IrcLineConnection(object):
 		self.readlinecache = []
 
 	def connect(self):
+		# FIXME: allow ssl
 		self.socket = socket.create_connection(
 				(self.host, self.port))
 
@@ -901,6 +906,7 @@ class Construct(object):
 		newprofile = self.server.create_profile(user.nick, password)
 		self.notice(user, "Successfully registered %s, please remember your password to identify next time" % user.nick)
 		user.identify(newprofile)
+		# FIXME: tell user he can now register channels, etc
 
 	@needs_profile
 	@test_arg_as_password
@@ -963,6 +969,8 @@ class Construct(object):
 		""" oper
 		confirm <nick> <realname> <email>
 		Confirm a registered user really is who he says he is """
+		# FIXME: allow last argument to specify serveroper
+		# FIXME: check if we are not downgrading last serveroper
 		r = re.match('(\S+)\s+(.*)\s+(\S+@\S+)', args.strip())
 		if not r:
 			raise IrcMsgException(oper, "need: <nick> <realname> <email>")
@@ -981,6 +989,7 @@ class Construct(object):
 		""" oper
 		unconfirm <nick>
 		For undoing 'confirm' """
+		# FIXME: check if we are not downgrading last serveroper
 		nick = args.strip()
 		profile = self.server.find_profile(nick)
 		if not profile:
@@ -1272,6 +1281,8 @@ if __name__ == "__main__":
 	parser.add_argument('--config', '-c', type=str, help='config file', required=True)
 	args = parser.parse_args()
 
+	# FIXME: would like to have the configfile in a similar format as ircd.conf
+	# FIXME: at least some format that allows comments
 	config = json.load(open(args.config))
 	server = Server(**config['server'])
 
