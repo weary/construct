@@ -213,11 +213,14 @@ class Channel(object):
 		profile = user.profile
 		if not profile:
 			raise IrcMsgException(oper, "Guest users cannot have roles, %s must register first" % user.nick)
-		self.roles[profile.profileid] = role
+		if role:
+			self.roles[profile.profileid] = role
+		else:
+			del self.roles[profile.profileid]
 		#self.fix_user_to_role(user)
 
 	def del_role(self, oper, user):
-		self.set_role(user, None)
+		self.set_role(oper, user, None)
 
 	def get_roles(self, oper):
 		if not self.registered:
@@ -263,6 +266,7 @@ class Channel(object):
 		elif role is operrole:
 			if not 'o' in mode:
 				self.op_user(user)
+				# FIXME: this does not work
 
 	def find_role(self, user, defaultrole=None):
 		assert self.registered
@@ -760,6 +764,8 @@ class Handler(object):
 			self.parse_line(line)
 			if self.serverstate == "connected":
 				return
+		else:
+			raise Exception("Lost connection, while connecting")
 
 # decorator
 def needs_profile(func):
@@ -1004,23 +1010,24 @@ class Construct(object):
 	def cmd_show_profile(self, user, cmd, args):
 		""" registered
 		show_profile [<nick>]
-		Show the profile currently associated with your session. Server operators
-		can use the extended version of this command and specify a nick """
+		Show the profile currently associated with your session. """
 		nick = args.strip()
-		if user.profile.level is operlevel and nick:
+		if nick and (user.profile.level is operlevel or
+				user.profile.level is confirmedlevel):
 			profile = self.server.find_profile(nick)
 			if not profile:
 				raise IrcMsgException(user, "No profile for nick '%s'" % nick)
 			self.notice(user, "Profile for %s:" % nick)
 		else:
 			if args:
-				raise IrcMsgException(user, "Too many arguments, you are not allowed to specify a nickname")
+				raise IrcMsgException(user, "You must have a confirmed account to view others")
 			profile = user.profile
 			self.notice(user, "Your profile:")
-		self.notice(user, "Known aliasses: " + make_list(profile.aliasses, "and"))
+		self.notice(user, "Known aliases: " + make_list(profile.aliasses, "and"))
 		self.notice(user, "Level: " + level_as_text(profile.level))
 		self.notice(user, "Real name: " + profile.realname)
 		self.notice(user, "Email: " + profile.realname)
+		# FIXME: known ban/allows/opers for user
 
 	@no_leftover_arguments
 	def cmd_restart(self, user, cmd):
@@ -1053,13 +1060,23 @@ class Construct(object):
 
 	@needs_channel
 	@no_leftover_arguments
-	def cmd_roles(self, user, chan, cmd):
+	def cmd_roles(self, oper, chan, cmd):
 		""" chanoper
 		roles <chan>
 		Show the current known roles for channel """
-		roles = chan.get_roles(user)
+		roles = chan.get_roles(oper)
 		if not roles:
-			raise IrcMsgException(user, "No roles defined for %s" % chan.name)
+			raise IrcMsgException(oper, "No roles defined for %s" % chan.name)
+
+		if chan.allow_guests:
+			self.notice(oper, "%s allows guests" % chan.name)
+		else:
+			self.notice(oper, "%s denies guests" % chan.name)
+
+		if chan.default_policy_allow:
+			self.notice(oper, "%s policy is allow" % chan.name)
+		else:
+			self.notice(oper, "%s policy is deny" % chan.name)
 
 		for profile, role in roles:
 			user = self.server.get_user_for_profile(profile)
@@ -1070,7 +1087,7 @@ class Construct(object):
 				nick = profile.aliasses[0]
 				online = "offline"
 			role = role_as_text(role)
-			self.notice(user, "%s %s %s (%s)" % (chan.name, nick, role, online))
+			self.notice(oper, "%s %s %s (%s)" % (chan.name, nick, role, online))
 
 	@needs_channel
 	def cmd_add(self, oper, chan, cmd, args):
@@ -1121,6 +1138,7 @@ class Construct(object):
 		else:
 			raise IrcMsgException(oper, "please use 'allow' or 'deny'. not '%s'" % allowstr)
 
+		# FIXME, this command does not work
 		chan.set_allow_guests(oper, allow)
 		chan.fix_all_users()
 
@@ -1137,7 +1155,7 @@ class Construct(object):
 		chan.fix_all_users()
 
 	@no_leftover_arguments
-	def cmd_profiles(self, user, cmd):
+	def cmd_profiles(self, oper, cmd):
 		""" oper
 		profiles
 		Show registered profiles """
@@ -1272,6 +1290,7 @@ class Construct(object):
 
 		self.notice(user, "OK")
 
+	# FIXME: commando waarmee je kunt zien in welk kanaal je een rol hebt
 
 if __name__ == "__main__":
 	FORMAT = '#%(message)s'
