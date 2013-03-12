@@ -250,14 +250,17 @@ class Channel(object):
 			print "fixing - not registered"
 			return  # not doing anything for channels nobody cares about
 
+		if not self.allow_guests and not user.profile:
+			print "fixing - guests not allowed"
+			self.remove_user(user)
+
 		role = self.find_role(user)
 		mode = self.users.get(user)
 		if mode is None:
 			print "fixing - user not in channel"
 			return
 
-		print "fixing - role =", role_as_text(role)
-		print "fixing - mode =", mode
+		print "fixing - role =", role_as_text(role), ", mode =", mode
 		if role is banrole:
 			self.remove_user(user)
 		elif role is allowrole:
@@ -324,7 +327,7 @@ class Channel(object):
 				user.nick, self.name))
 			return
 
-		self.users.discard(user)
+		del self.users[user]
 		log.debug("%s: %s kicked: %s" % (
 			self.name, user.nick, ', '.join(u.nick for u in self.users)))
 		if not self.users:
@@ -332,8 +335,8 @@ class Channel(object):
 
 	def quit(self, user):
 		if user in self.users:
-			self.users.discard(user)
-			log.debug("%s: %s logged out: %s" % (
+			del self.users[user]
+			log.debug("%s: %s logged out, leftover: %s" % (
 				self.name, user.nick, ', '.join(u.nick for u in self.users)))
 		if not self.users:
 			self.parent.channel_empty(self)
@@ -379,11 +382,11 @@ class Channel(object):
 class Profile(object):
 	def __init__(self, id_, nickname, password):
 		self.profileid = id_
-		self.aliasses = set([nickname])
+		self.aliases = set([nickname])
 		self.level = registeredlevel  # if we have a profile we are registered
 		self.password = password
-		self.realname = nickname  # best guess we have
-		self.email = ''
+		self.realname = None
+		self.email = None
 
 	def test_password(self, password):
 		return self.password == password
@@ -398,8 +401,8 @@ class Profile(object):
 
 	def unconfirm(self):
 		self.level = registeredlevel
-		self.realname = self.aliasses[0]
-		self.email = ''
+		self.realname = None
+		self.email = None
 
 
 class ProfileDB(object):
@@ -410,9 +413,11 @@ class ProfileDB(object):
 		self.next_id = 1
 
 	def find_profile(self, nickname):
+		nickname = nickname.lower()
 		for p in self.profiles:
-			if nickname in p.aliasses:
-				return p
+			for a in p.aliases:
+				if a.lower() == nickname:
+					return p
 
 		return None
 
@@ -446,8 +451,9 @@ class UserDB(object):
 	def get_user(self, needednick, defaultval=None):
 		#print "looking for user '%s', current users: %s" % (
 		#		needednick, ', '.join(u.nick for u in self.users))
+		needednick = needednick.lower()
 		for user in self.users:
-			if user.nick == needednick:
+			if user.nick.lower() == needednick:
 				return user
 		return defaultval
 
@@ -459,11 +465,8 @@ class UserDB(object):
 		#		user.nick, ', '.join(u.nick for u in self.users))
 		return user
 
-	def remove_user(self, nick):
-		assert not self.get_user(nick) is None
-		self.users = [
-				user for user in self.users
-				if user.nick != nick]
+	def remove_user(self, user):
+		self.users.remove(user)
 		#print "removed user '%s', current users: %s" % (
 		#		nick, ', '.join(u.nick for u in self.users))
 
@@ -719,8 +722,9 @@ class Handler(object):
 		chan.mode(user, modechange)
 
 	def msg_quit(self, who, reason):
-		self.server.channel_user_quit(who)
-		self.server.remove_user(who)
+		user = self.server.get_user(who)
+		self.server.channel_user_quit(user)
+		self.server.remove_user(user)
 
 	def msg_privmsg(self, fromnick, tonick, msg):
 		construct = self.server.construct
@@ -876,7 +880,8 @@ class Construct(object):
 		""" guest identify <password>
 		Tell the server who you are, binding an earlier
 		registered profile to your current session """
-		self.notice(user, "Successfully identified as %s" % profile.realname)
+		self.notice(user, "Successfully identified as %s" %
+				profile.realname or profile.aliases[0])
 
 		# someone else already using this profile??
 		user_ = self.server.get_user_for_profile(profile)
@@ -915,34 +920,41 @@ class Construct(object):
 		# FIXME: tell user he can now register channels, etc
 
 	@needs_profile
-	@test_arg_as_password
-	@fix_user_on_channels_afterwards
-	def cmd_unregister_user(self, user, profile, cmd):
+	def cmd_unregister_user(self, caller, callerprofile, cmd, args):
 		""" registered
-		unregister_user <password>
-		Destroy registered profile. Does an implicit unidentify"""
+		unregister_user [<nick>] [<password>]
+		Destroy registered profile. Does an implicit unidentify.
+		Only server operator can unregister others. """
 
-		assert user == self.server.get_user_for_profile(profile)
-		user.unidentify()
+		args = args.split()
+		if callerprofile.level is operlevel:
+			if len(args) != 1:
+				raise IrcMsgException(caller, "Server operators should only specify a nickname")
+			profile = self.server.find_profile(args[0])
+			if not profile:
+				raise IrcMsgException(caller, "No profile for nick '%s'" % args[0])
+			if profile is callerprofile:
+				raise IrcMsgException(caller, "Server operators cannot unregister their own profile")
+		else:
+			if len(args) == 2:
+				pwd = args[1]
+				profile = self.server.find_profile(args[0])
+				if not profile:
+					raise IrcMsgException(caller, "No profile for nick '%s'" % args[0])
+				if not profile is callerprofile:
+					raise IrcMsgException(caller, "You can only unregister your own profile")
+			else:
+				pwd = args[0]
+				profile = callerprofile
+			profile.test_password(pwd)
+
+		user = self.server.get_user_for_profile(profile)
+		if user:
+			user.unidentify()
 		self.server.drop_profile(profile)
+		if user:
+			self.server.fix_user_on_all_channels(user)
 		
-	def cmd_force_unregister(self, oper, cmd, args):
-		""" oper
-		force_unregister <nick>
-		Destroy profile for given user """
-		nick = args.strip()
-		if not nick:
-			raise IrcMsgException(oper, "Missing nickname")
-		profile = self.server.find_profile(nick)
-		if not profile:
-			raise IrcMsgException(oper, "No profile found for '%s'" % nick)
-
-		user_ = self.server.get_user_for_profile(profile)
-		if user_:
-			user_.unidentify()
-			self.server.fix_user_on_all_channels(user_)
-		self.server.drop_profile(profile)
-
 	def cmd_reset_pass(self, oper, cmd, args):
 		""" oper
 		reset_pass <nick> <newpass>
@@ -1023,10 +1035,12 @@ class Construct(object):
 				raise IrcMsgException(user, "You must have a confirmed account to view others")
 			profile = user.profile
 			self.notice(user, "Your profile:")
-		self.notice(user, "Known aliases: " + make_list(profile.aliasses, "and"))
+		self.notice(user, "Known aliases: " + make_list(profile.aliases, "and"))
 		self.notice(user, "Level: " + level_as_text(profile.level))
-		self.notice(user, "Real name: " + profile.realname)
-		self.notice(user, "Email: " + profile.realname)
+		if profile.realname:
+			self.notice(user, "Real name: " + profile.realname)
+		if profile.email:
+			self.notice(user, "Email: " + profile.email)
 		# FIXME: known ban/allows/opers for user
 
 	@no_leftover_arguments
@@ -1084,10 +1098,10 @@ class Construct(object):
 				nick = user.nick
 				online = "online"
 			else:
-				nick = profile.aliasses[0]
+				nick = profile.aliases[0]
 				online = "offline"
 			role = role_as_text(role)
-			self.notice(oper, "%s %s %s (%s)" % (chan.name, nick, role, online))
+			self.notice(oper, "- %s %s %s (%s)" % (chan.name, nick, role, online))
 
 	@needs_channel
 	def cmd_add(self, oper, chan, cmd, args):
@@ -1160,15 +1174,18 @@ class Construct(object):
 		profiles
 		Show registered profiles """
 		for prof in self.server.get_all_profiles():
-			user = self.server.get_user_for_profile(profile)
+			user = self.server.get_user_for_profile(prof)
 			if user:
 				nick = user.nick
 				online = "online"
 			else:
-				nick = profile.aliasses[0]
+				nick = prof.aliases[0]
 				online = "offline"
 			level = level_as_text(prof.level)
-			self.notice(user, "- %s %s (%s)" % (nick, level, online))
+			rn = ''
+			if prof.realname:
+				rn = "(%s)" % prof.realname
+			self.notice(user, "- %s%s %s (%s)" % (nick, rn, level, online))
 
 	@no_leftover_arguments
 	def cmd_channels(self, user, cmd):
@@ -1278,7 +1295,7 @@ class Construct(object):
 
 		funcs = [tup for tup in self.commands if tup[0].startswith(cmd)]
 		if len(funcs) == 0:
-			raise IrcMsgException(user, "Unknown command")
+			raise IrcMsgException(user, "Unknown command '%s'" % cmd)
 		elif len(funcs) > 1:
 			raise IrcMsgException(user, "Non-unique command, choose: " + make_list(
 				(tup[0] for tup in funcs), "or"))
@@ -1305,9 +1322,11 @@ if __name__ == "__main__":
 	config = json.load(open(args.config))
 	server = Server(**config['server'])
 
-	profile = server.create_profile("weary", "aap")
-	profile.realname = "Hylke"
-	profile.level = operlevel
+	if 'oper' in config:
+		oper = config['oper']
+		profile = server.create_profile(oper['nick'], oper['password'])
+		profile.realname = oper['realname']
+		profile.level = operlevel
 
 	hand = Handler(server, **config['connect'])
 	hand.connect()
