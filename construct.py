@@ -252,7 +252,7 @@ class Channel(object):
 
 		if not self.allow_guests and not user.profile:
 			print "fixing - guests not allowed"
-			self.remove_user(user)
+			self.remove_user(user, "guests not allowed")
 
 		role = self.find_role(user)
 		mode = self.users.get(user)
@@ -262,7 +262,7 @@ class Channel(object):
 
 		print "fixing - role =", role_as_text(role), ", mode =", mode
 		if role is banrole:
-			self.remove_user(user)
+			self.remove_user(user, "user not allowed")
 		elif role is allowrole:
 			if 'o' in mode:
 				self.deop_user(user)
@@ -366,12 +366,14 @@ class Channel(object):
 		self.send("MODE %s -o %s" % (self.name, user.nick))
 		self.mode(user, "-o")
 
-	def remove_user(self, user):
+	def remove_user(self, user, reason):
 		assert self.registered
 		if not user in self.users:
 			log.warn("User %s not on channel %s, cannot remove" % (user.nick, self.name))
-		log.debug("%s removed %s" % (self.name, user.nick))
-		self.send("KICK %s %s :Restricted Channel" % (self.name, user.nick))
+		log.debug("%s removed %s for %s" % (self.name, user.nick, reason))
+		if reason:
+			reason = ', ' + reason
+		self.send("KICK %s %s :Restricted channel%s" % (self.name, user.nick, reason))
 		# FIXME: need temporary ban here, to prevent auto-rejoin
 		del self.users[user]
 

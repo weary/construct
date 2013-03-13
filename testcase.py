@@ -2,6 +2,7 @@
 import socket
 import thread
 import time
+import sys
 
 server = ('127.0.0.1', 6667)
 
@@ -9,18 +10,26 @@ class TestUser(object):
 	def __init__(self, nick, username, realname):
 		self.socket = socket.create_connection(server)
 		self.nick = nick
+		self.username = username
 		self.disco = False
 
+		self.out = open("%s.log" % nick, "w")
 		self.lines = []
 		self.linelock = thread.allocate_lock()
+		self.printlock = thread.allocate_lock()
 		thread.start_new_thread(self.recv, ())
 
 		self.send("USER %s %s %s %s" % (
 			username, 'testhost', server[0], realname))
 		self.send("NICK %s" % self.nick)
+		self.wait_for_line(":sin 001")
 
 	def send(self, line):
-		print "<- %s: %s" % (self.nick, line)
+		printline = "<- %s: %s" % (self.nick, line)
+		print >>self.out, printline
+		self.out.flush()
+		with self.printlock:
+			print printline
 		self.socket.send(line + '\n')
 
 	def recv(self):
@@ -35,8 +44,14 @@ class TestUser(object):
 				del lines[-1]
 				lines = [l.rstrip('\r') for l in lines]
 				for l in lines:
-					print "-> %s: %s" % (self.nick, l)
+					print >>self.out, "-> %s: %s" % (self.nick, l)
+				self.out.flush()
+				#with self.printlock:
+				#	for l in lines:
+				#		print "-> %s: %s" % (self.nick, l)
 				with self.linelock:
+					#for line in lines:
+					#	print >>self.out, "adding line:", line
 					self.lines.extend(lines)
 
 				if newdata == '':
@@ -55,48 +70,185 @@ class TestUser(object):
 		self.nick = newnick
 
 	def quit(self, reason):
+		self.clearlines()
 		self.send(":%s QUIT :%s" % (self.nick, reason))
 
 	def join(self, channel):
+		self.clearlines()
 		self.send(":%s JOIN %s" % (self.nick, channel))
+		self.wait_for_line(":%s!%s@i.love.debian.org JOIN :%s" % (
+			self.nick, self.username, channel))
 
 	def part(self, channel):
+		self.clearlines()
 		self.send(":%s PART %s" % (self.nick, channel))
 
+	def kick(self, channel, who):
+		self.clearlines()
+		self.send(":%s KICK %s :%s" % (self.nick, channel, who))
+
+	def clearlines(self):
+		with self.linelock:
+			#for line in self.lines:
+			#	print >>self.out, "throwing out:", line
+			self.lines = []
+
+	def cmd(self, cmd, ignore_result=False):
+		self.clearlines()
+		self.send(":%s PRIVMSG construct :%s" % (self.nick, cmd))
+		if not ignore_result:
+			prefix = ":construct!-@- NOTICE %s :OK" % self.nick
+			self.wait_for_line(prefix)
+
+	def names(self, channel):
+		self.clearlines()
+		self.send(":%s NAMES %s" % (self.nick, channel))
+		prefix = ":sin 353 %s = %s :" % (self.nick, channel)
+		result = self.wait_for_line(prefix)
+		result = set(result[len(prefix):].split(' '))
+		return result
+
 	def wait_for_line(self, linestart):
+		prev_linecount = 0
+		print >>self.out, "looking for:", linestart
 		while 1:
 			time.sleep(0.1)
 			with self.linelock:
-				while self.lines:
-					line = self.lines[0]
-					del self.lines[0]
+				for i in xrange(prev_linecount, len(self.lines)):
+					line = self.lines[i]
+					#print >>self.out, "checking:", line
 					if line.startswith(linestart):
-						return
+						#print >>self.out, "match!"
+						del self.lines[i]
+						return line
+				prev_linecount = len(self.lines)
 
 	def wait(self):
 		while not self.disco:
 			time.sleep(0.1)
 
+def assert_set(s1, s2):
+	if s1 != s2:
+		print s1, "!=", s2
+	assert s1 == s2
 
 if __name__ == "__main__":
-	user1 = TestUser("user1", "testuser1", "Test User 1")
-	user1.wait_for_line(":sin 001")
-	user1.msg("construct", "register mypass")
-	user1.msg("construct", "register-channel #aap2")
-	user1.join("#aap2")
-	user1.msg("#aap2", "ik mag er in!")
-	user1.part("#aap2")
-	user1.quit("no reason")
-	user1.wait()
+	serveroper = TestUser("sErveroper", "serverope1", "ServerOper")
+	chanoper = TestUser("cHanoper", "chanoper1", "ChanOper")
+	guest = TestUser("gUest", "guest1", "Guest")
+	allowed = TestUser("aLlowed", "allowed1", "Allowed")
+	banned = TestUser("bAnned", "banned1", "Banned")
+	everyone = [serveroper, chanoper, guest, allowed, banned]
 
-	user2 = TestUser("user2", "testuser2", "Test User 2")
+	serveroper.cmd("id serveroperpass")
+	serveroper.cmd("unregister_user chanoper", True)
+	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
+	serveroper.cmd("unregister_user allowed", True)
+	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
+	serveroper.cmd("unregister_user banned", True)
+	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
+	serveroper.cmd("unregister_channel #testchan", True)
+	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
+
+	serveroper.join("#soonempty")
+	serveroper.part("#soonempty")
+
+	allowed.cmd("register_user allowedpass")
+	banned.cmd("register_user bannedpass")
+
+	chanoper.cmd("register_user chanoperpass")
+	serveroper.cmd("confirm %s Channel -Confirmed- Operator chanoper@someemail" % chanoper.nick)
+	chanoper.cmd("show_profile")
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Your profile:")
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Known aliases: cHanoper")
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Level: confirmed")
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Real name: Channel -Confirmed- Operator")
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Email: chanoper@someemail")
+
+	serveroper.cmd("confirm %s stomme naam fout@email" % allowed.nick)
+	serveroper.cmd("unconfirm %s" % allowed.nick)
+
+	chanoper.join("#testchan")
+	chanoper.cmd("register_channel #testchan")
+
+	# no roles/policy/etc, everyone can join
+	guest.join('#testchan')
+	chanoper.wait_for_line(":gUest!guest1@i.love.debian.org JOIN :#testchan")
+	allowed.join('#testchan')
+	chanoper.wait_for_line(":aLlowed!allowed1@i.love.debian.org JOIN :#testchan")
+	banned.join('#testchan')
+	chanoper.wait_for_line(":bAnned!banned1@i.love.debian.org JOIN :#testchan")
+	assert chanoper.names('#testchan') == set(
+			['gUest', 'aLlowed', 'bAnned', '@cHanoper'])
+
+	chanoper.part('#testchan')
+	chanoper.join('#testchan')
+	chanoper.wait_for_line(":construct!-@- MODE #testchan +o cHanoper")
+	assert chanoper.names('#testchan') == set(
+			['gUest', 'aLlowed', 'bAnned', '@cHanoper'])
+
+	chanoper.kick('#testchan', chanoper.nick)
+	chanoper.join('#testchan')
+
+	chanoper.cmd("guests #testchan deny")
+	guest.wait_for_line(":construct!-@- KICK #testchan gUest :Restricted channel")
+	chanoper.wait_for_line(":construct!-@- KICK #testchan gUest :Restricted channel")
+	guest.join('#testchan')
+	guest.wait_for_line(":construct!-@- KICK #testchan gUest :Restricted channel")
+	chanoper.wait_for_line(":construct!-@- KICK #testchan gUest :Restricted channel")
+
+	chanoper.cmd("add #testchan banned ban")
+	banned.wait_for_line(":construct!-@- KICK #testchan bAnned :Restricted channel")
+	chanoper.wait_for_line(":construct!-@- KICK #testchan bAnned :Restricted channel")
+	banned.join('#testchan')
+	banned.wait_for_line(":construct!-@- KICK #testchan bAnned :Restricted channel")
+	chanoper.wait_for_line(":construct!-@- KICK #testchan bAnned :Restricted channel")
+
+	chanoper.cmd("policy #testchan deny")
+	allowed.wait_for_line(":construct!-@- KICK #testchan aLlowed :Restricted channel")
+	chanoper.wait_for_line(":construct!-@- KICK #testchan aLlowed :Restricted channel")
+	assert chanoper.names('#testchan') == set(['@cHanoper'])
+	chanoper.cmd("add #testchan allowed allow")
+	allowed.join('#testchan')
+	chanoper.wait_for_line(":aLlowed!allowed1@i.love.debian.org JOIN :#testchan")
+	assert chanoper.names('#testchan') == set(['@cHanoper', 'aLlowed'])
+	chanoper.cmd("mod #testchan allowed oper")
+	chanoper.cmd("mod #testchan chanoper allow")
+	chanoper.wait_for_line(":construct!-@- MODE #testchan -o cHanoper")
+	allowed.cmd("del #testchan chanoper")
+
+	serveroper.cmd("profiles")
+	serveroper.cmd("channels")
+	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :- #testchan 1 users (registered)")
+	serveroper.cmd("roles #testchan")
+	chanoper.cmd("roles #testchan", True)
+	chanoper.wait_for_line(":construct!-@- NOTICE %s :Access denied" % chanoper.nick)
+	allowed.cmd("roles #testchan")
+	assert allowed.names('#testchan') == set(['@aLlowed'])
+
+	allowed.cmd("unregister_channel #testchan")
+	serveroper.cmd("channels")
+	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :- #testchan 1 users (not registered)")
+
+	serveroper.cmd("help")
+	serveroper.cmd("help channels")
+
+	print
+	print "---------------end---------------------"
+	print
+	for u in everyone:
+		u.quit("end of test")
+	for u in everyone:
+		u.wait()
+	sys.exit(0)
+	user2 = TestUser("user2", "testuser2", "TestUser2")
 	user2.wait_for_line(":sin 001")
 	user2.msg("construct", "register otherpass")
 
 	time.sleep(0.5)
 	print "-----------------------"
 
-	user1 = TestUser("user1", "testuser1", "Test User 1")
+	user1 = TestUser("user1", "testuser1", "TestUser1")
 	user1.wait_for_line(":sin 001")
 	user1.msg(user2.nick, "hoi! ik ben er ook!")
 	user1.msg("construct", "identify mypass")
