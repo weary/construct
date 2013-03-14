@@ -5,6 +5,7 @@ import logging
 import re
 import time
 import traceback
+from collections import defaultdict
 from functools import wraps
 log = logging.getLogger('construct')
 
@@ -51,9 +52,9 @@ def level_as_text(level):
 
 def role_as_text(role):
 	if role is banrole:
-		return "ban"
+		return "banned"
 	elif role is allowrole:
-		return "allow"
+		return "allowed"
 	elif role is operrole:
 		return "oper"
 	else:
@@ -148,6 +149,17 @@ class ChannelDB(object):
 		return self.channels.values()
 
 
+def channel_registered(func):
+	@wraps(func)
+	def wrapper(self, *args):
+		if not self.registered:
+			raise IrcMsgException(
+					oper,
+					"Channel %s is not registered" % self.name)
+		return func(self, *args)
+	return wrapper
+
+
 class Channel(object):
 	def __init__(self, parent, name):
 		# generic
@@ -177,22 +189,12 @@ class Channel(object):
 	def usercount(self):
 		return len(self.users)
 
+	@channel_registered
 	def set_allow_guests(self, oper, allow_):
-		if not self.registered:
-			raise IrcMsgException(
-					oper,
-					"Channel is not registered")
-
 		self.allow_guests = allow_
 
-		#self.fix_all_users()
-
+	@channel_registered
 	def set_policy(self, oper, newpolicy):
-		if not self.registered:
-			raise IrcMsgException(
-					oper,
-					"Channel is not registered")
-
 		if newpolicy.lower() == "allow":
 			self.default_policy_allow = True
 		elif newpolicy.lower() == "deny":
@@ -202,8 +204,7 @@ class Channel(object):
 					oper,
 					"Invalid channel policy '%s'" % newpolicy)
 
-		#self.fix_all_users()
-
+	@channel_registered
 	def set_role(self, oper, user, role):
 		if not self.registered:
 			raise IrcMsgException(
@@ -217,23 +218,23 @@ class Channel(object):
 			self.roles[profile.profileid] = role
 		else:
 			del self.roles[profile.profileid]
-		#self.fix_user_to_role(user)
 
 	def del_role(self, oper, user):
 		self.set_role(oper, user, None)
 
+	@channel_registered
 	def get_roles(self, oper):
-		if not self.registered:
-			raise IrcMsgException(
-					oper,
-					"Channel %s is not registered" % self.name)
-
 		out = []
 		for profileid, role in self.roles.iteritems():
 			profile = self.parent.find_profile_by_id(profileid)
 			out.append((profile, role))
 
 		return out
+
+	@channel_registered
+	def get_role_for_profile(self, profile):
+		r = self.roles.get(profile.profileid)
+		return r
 
 	def fix_all_users(self):
 		users = list(self.users)
@@ -396,6 +397,9 @@ class Profile(object):
 	def reset_password(self, newpass):
 		self.password = newpass
 
+	def add_alias(self, newalias):
+		self.aliases.add(newalias)
+
 	def confirm(self, realname, email):
 		self.level = confirmedlevel
 		self.realname = realname
@@ -501,8 +505,8 @@ class UserDB(object):
 		for user in self.get_serveropers():
 			self.construct.notice(user, msg)
 
-	def kill_user(self, user):
-		self.send("KILL %s :ghost" % user.nick)
+	def kill_user(self, user, reason):
+		self.send("KILL %s :%s" % (user.nick, reason))
 		self.remove_user(user)
 
 
@@ -779,7 +783,7 @@ def needs_profile(func):
 	def find_profile(self, user, *args):
 		profile = self.server.find_profile(user.nick)
 		if not profile:
-			raise IrcMsgException(user, "No profiles registered for %s" % user.nick)
+			raise IrcMsgException(user, "No profiles registered for %s, not identified" % user.nick)
 		func(self, user, profile, *args)
 	return find_profile
 
@@ -888,7 +892,7 @@ class Construct(object):
 		# someone else already using this profile??
 		user_ = self.server.get_user_for_profile(profile)
 		if user_ and not user_ is user:
-			self.server.kill(user_, "new user identified")
+			self.server.kill_user(user_, "Ghosted by %s" % user.nick)
 
 		user.identify(profile)
 		if profile.level is operlevel:
@@ -1021,9 +1025,9 @@ class Construct(object):
 		if user:
 			self.server.fix_user_on_all_channels(user)
 
-	def cmd_show_profile(self, user, cmd, args):
+	def cmd_whois(self, user, cmd, args):
 		""" registered
-		show_profile [<nick>]
+		whois [<nick>]
 		Show the profile currently associated with your session. """
 		nick = args.strip()
 		if nick and (user.profile.level is operlevel or
@@ -1033,7 +1037,7 @@ class Construct(object):
 				raise IrcMsgException(user, "No profile for nick '%s'" % nick)
 			self.notice(user, "Profile for %s:" % nick)
 		else:
-			if args:
+			if args and nick.lower() != user.nick.lower():
 				raise IrcMsgException(user, "You must have a confirmed account to view others")
 			profile = user.profile
 			self.notice(user, "Your profile:")
@@ -1043,7 +1047,31 @@ class Construct(object):
 			self.notice(user, "Real name: " + profile.realname)
 		if profile.email:
 			self.notice(user, "Email: " + profile.email)
-		# FIXME: known ban/allows/opers for user
+
+		roles = defaultdict(list)
+		for chan in self.server.get_all_channels():
+			if not chan.registered:
+				continue
+			role = chan.get_role_for_profile(profile)
+			if not role is None:
+				roles[role].append(chan.name)
+
+		for role, channels in roles.iteritems():
+			self.notice(user, "User is %s in %s" % (
+				role_as_text(role), make_list(channels, "and")))
+
+	@needs_profile
+	def cmd_alias(self, user, profile, cmd, args):
+		""" registered
+		alias <newalias>
+		Add an extra nickname to your profile that can be used to identify """
+		args = args.split()
+		if len(args) != 1:
+			raise IrcMsgException(user, "Can register only one alias at a time")
+		if args[0].lower() in [a.lower() for a in profile.aliases]:
+			raise IrcMsgException(user, "Alias %s already registered" % args[0])
+		profile.add_alias(args[0])
+		# FIXME, allow adding/removing/listing of aliases
 
 	@no_leftover_arguments
 	def cmd_restart(self, user, cmd):

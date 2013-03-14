@@ -157,13 +157,20 @@ if __name__ == "__main__":
 	banned.cmd("register_user bannedpass")
 
 	chanoper.cmd("register_user chanoperpass")
+	chanoper.cmd("alias chanopEr_")
 	serveroper.cmd("confirm %s Channel -Confirmed- Operator chanoper@someemail" % chanoper.nick)
-	chanoper.cmd("show_profile")
+	chanoper.cmd("whois")
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Your profile:")
-	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Known aliases: cHanoper")
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Known aliases: chanopEr_ and cHanoper")
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Level: confirmed")
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Real name: Channel -Confirmed- Operator")
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Email: chanoper@someemail")
+
+	chanoper2 = TestUser("chAnoper_", "chanoper2", "ChanOper")
+	chanoper2.cmd("id chanoperpass")
+	everyone.append(chanoper2)
+	chanoper = chanoper2
+	chanoper.nickchange("cHanoper")
 
 	serveroper.cmd("confirm %s stomme naam fout@email" % allowed.nick)
 	serveroper.cmd("unconfirm %s" % allowed.nick)
@@ -215,6 +222,12 @@ if __name__ == "__main__":
 	chanoper.cmd("mod #testchan allowed oper")
 	chanoper.cmd("mod #testchan chanoper allow")
 	chanoper.wait_for_line(":construct!-@- MODE #testchan -o cHanoper")
+	serveroper.cmd("whois chanoper")
+	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :User is allowed in #testchan")
+	serveroper.cmd("whois allowed")
+	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :User is oper in #testchan")
+	serveroper.cmd("whois banned")
+	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :User is banned in #testchan")
 	allowed.cmd("del #testchan chanoper")
 
 	serveroper.cmd("profiles")
