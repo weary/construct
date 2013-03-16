@@ -7,6 +7,7 @@ import time
 import traceback
 from collections import defaultdict
 from functools import wraps
+from copy import copy
 log = logging.getLogger('construct')
 
 # FIXME: Should keep profiles/roles in database
@@ -59,6 +60,14 @@ def role_as_text(role):
 		return "oper"
 	else:
 		assert False
+
+def capitalize(msg):
+	return msg[:1].upper() + msg[1:]
+
+def sort(container):
+	c = copy(container)
+	c.sort()
+	return c
 
 # helper taken from pietbot
 # maak lijst gescheiden door ,'s, behalve tussen laatste 2 items, waar "en" komt
@@ -151,12 +160,12 @@ class ChannelDB(object):
 
 def channel_registered(func):
 	@wraps(func)
-	def wrapper(self, *args):
+	def wrapper(self, user, *args):
 		if not self.registered:
 			raise IrcMsgException(
-					oper,
+					user,
 					"Channel %s is not registered" % self.name)
-		return func(self, *args)
+		return func(self, user, *args)
 	return wrapper
 
 
@@ -206,11 +215,6 @@ class Channel(object):
 
 	@channel_registered
 	def set_role(self, oper, user, role):
-		if not self.registered:
-			raise IrcMsgException(
-					oper,
-					"Channel %s is not registered" % self.name)
-
 		profile = user.profile
 		if not profile:
 			raise IrcMsgException(oper, "Guest users cannot have roles, %s must register first" % user.nick)
@@ -270,7 +274,6 @@ class Channel(object):
 		elif role is operrole:
 			if not 'o' in mode:
 				self.op_user(user)
-				# FIXME: this does not work
 
 	def find_role(self, user, defaultrole=None):
 		assert self.registered
@@ -385,7 +388,7 @@ class Channel(object):
 class Profile(object):
 	def __init__(self, id_, nickname, password):
 		self.profileid = id_
-		self.aliases = set([nickname])
+		self.register_nick = nickname
 		self.level = registeredlevel  # if we have a profile we are registered
 		self.password = password
 		self.realname = None
@@ -397,9 +400,6 @@ class Profile(object):
 	def reset_password(self, newpass):
 		self.password = newpass
 
-	def add_alias(self, newalias):
-		self.aliases.add(newalias)
-
 	def confirm(self, realname, email):
 		self.level = confirmedlevel
 		self.realname = realname
@@ -410,6 +410,9 @@ class Profile(object):
 		self.realname = None
 		self.email = None
 
+	def is_confirmed(self):
+		return self.level is operlevel or self.level is confirmedlevel
+
 
 class ProfileDB(object):
 	def __init__(self):
@@ -418,12 +421,11 @@ class ProfileDB(object):
 
 		self.next_id = 1
 
-	def find_profile(self, nickname):
+	def find_profile_by_nickname(self, nickname):
 		nickname = nickname.lower()
 		for p in self.profiles:
-			for a in p.aliases:
-				if a.lower() == nickname:
-					return p
+			if p.register_nick.lower() == nickname:
+				return p
 
 		return None
 
@@ -506,6 +508,7 @@ class UserDB(object):
 			self.construct.notice(user, msg)
 
 	def kill_user(self, user, reason):
+		log.info("User %s killed, %s", user.nick, reason)
 		self.send("KILL %s :%s" % (user.nick, reason))
 		self.remove_user(user)
 
@@ -524,6 +527,10 @@ class User(object):
 
 	def unidentify(self):
 		self.profile = None
+
+	def is_confirmed(self):  # is user at least confirmed
+		profile = self.profile
+		return profile and profile.is_confirmed()
 
 
 class Server(UserDB, ChannelDB, ProfileDB):
@@ -563,6 +570,10 @@ class IrcLineConnection(object):
 		# FIXME: allow ssl
 		self.socket = socket.create_connection(
 				(self.host, self.port))
+
+	def disconnect(self):
+		self.socket.close()
+		self.socket = None
 
 	def write(self, line):
 		lines = line
@@ -640,6 +651,10 @@ class Handler(object):
 		self.con.connect()
 		self.send("PASS %s :TS" % self.send_password)
 		self.server.send_server_string()
+
+	def disconnect(self):
+		self.con.disconnect()
+		self.con = None
 
 	def msg_ping(self, who):
 		self.send("PONG :" + who)
@@ -748,6 +763,8 @@ class Handler(object):
 					func(*r.groups())
 					return
 			raise OperMsgException("Unparsed line: %s" % line)
+		except RestartException:
+			raise  # pass upwards
 		except IrcMsgException, e:
 			if e.user:
 				self.server.construct.notice(e.user, e.msg)
@@ -781,7 +798,7 @@ class Handler(object):
 def needs_profile(func):
 	@wraps(func)
 	def find_profile(self, user, *args):
-		profile = self.server.find_profile(user.nick)
+		profile = self.server.find_profile_by_nickname(user.nick)
 		if not profile:
 			raise IrcMsgException(user, "No profiles registered for %s, not identified" % user.nick)
 		func(self, user, profile, *args)
@@ -879,15 +896,27 @@ class Construct(object):
 		msg = ":%s %s" % (self.nick, msg)
 		handler.send(msg)
 
-	@needs_profile
-	@test_arg_as_password
 	@fix_user_on_channels_afterwards
-	def cmd_identify(self, user, profile, cmd):
-		""" guest identify <password>
+	def cmd_identify(self, user, cmd, args):
+		""" guest identify [<nick>] <password>
 		Tell the server who you are, binding an earlier
 		registered profile to your current session """
+		args = [arg.strip() for arg in args.split()]
+		if len(args) == 2:
+			nick, pwd = args
+		elif len(args) == 1:
+			nick, pwd = user.nick, args[0]
+		else:
+			raise IrcMsgException(user, "Invalid arguments, need (optionally) a username and a password")
+
+		profile = self.server.find_profile_by_nickname(nick)
+		if not profile:
+			raise IrcMsgException(user, "No profile for %s, please register first" % nick)
+		if not profile.test_password(pwd):
+			raise IrcMsgException(user, "Invalid password for %s" % nick)
+
 		self.notice(user, "Successfully identified as %s" %
-				profile.realname or profile.aliases[0])
+				profile.realname or profile.register_nick)
 
 		# someone else already using this profile??
 		user_ = self.server.get_user_for_profile(profile)
@@ -913,7 +942,7 @@ class Construct(object):
 		""" guest
 		register_user <password>
 		Create a new profile for the current user """
-		profile = self.server.find_profile(user.nick)
+		profile = self.server.find_profile_by_nickname(user.nick)
 		if profile:
 			raise IrcMsgException(user, "User %s already registered" % user.nick)
 
@@ -936,7 +965,7 @@ class Construct(object):
 		if callerprofile.level is operlevel:
 			if len(args) != 1:
 				raise IrcMsgException(caller, "Server operators should only specify a nickname")
-			profile = self.server.find_profile(args[0])
+			profile = self.server.find_profile_by_nickname(args[0])
 			if not profile:
 				raise IrcMsgException(caller, "No profile for nick '%s'" % args[0])
 			if profile is callerprofile:
@@ -944,7 +973,7 @@ class Construct(object):
 		else:
 			if len(args) == 2:
 				pwd = args[1]
-				profile = self.server.find_profile(args[0])
+				profile = self.server.find_profile_by_nickname(args[0])
 				if not profile:
 					raise IrcMsgException(caller, "No profile for nick '%s'" % args[0])
 				if not profile is callerprofile:
@@ -970,7 +999,7 @@ class Construct(object):
 		except ValueError:
 			raise IrcMsgException("Invalid arguments, need nickname and new password")
 
-		profile = self.server.find_profile(nick)
+		profile = self.server.find_profile_by_nickname(nick)
 		if not profile:
 			raise IrcMsgException("No profile found for '%s'" % nick)
 		profile.reset_password(newpass)
@@ -1000,7 +1029,7 @@ class Construct(object):
 			raise IrcMsgException(oper, "need: <nick> <realname> <email>")
 		nick, realname, email = r.groups()
 
-		profile = self.server.find_profile(nick)
+		profile = self.server.find_profile_by_nickname(nick)
 		if not profile:
 			raise IrcMsgException(oper, "No profile found for '%s'" % nick)
 
@@ -1015,7 +1044,7 @@ class Construct(object):
 		For undoing 'confirm' """
 		# FIXME: check if we are not downgrading last serveroper
 		nick = args.strip()
-		profile = self.server.find_profile(nick)
+		profile = self.server.find_profile_by_nickname(nick)
 		if not profile:
 			raise IrcMsgException(oper, "No profile found for '%s'" % nick)
 
@@ -1025,29 +1054,17 @@ class Construct(object):
 		if user:
 			self.server.fix_user_on_all_channels(user)
 
-	def cmd_whois(self, user, cmd, args):
-		""" registered
-		whois [<nick>]
-		Show the profile currently associated with your session. """
-		nick = args.strip()
-		if nick and (user.profile.level is operlevel or
-				user.profile.level is confirmedlevel):
-			profile = self.server.find_profile(nick)
-			if not profile:
-				raise IrcMsgException(user, "No profile for nick '%s'" % nick)
-			self.notice(user, "Profile for %s:" % nick)
+	def online_or_offline(self, profile):
+		user = self.server.get_user_for_profile(profile)
+		if user:
+			if user.nick == profile.register_nick:
+				return "online"
+			else:
+				return "online as %s" % user.nick
 		else:
-			if args and nick.lower() != user.nick.lower():
-				raise IrcMsgException(user, "You must have a confirmed account to view others")
-			profile = user.profile
-			self.notice(user, "Your profile:")
-		self.notice(user, "Known aliases: " + make_list(profile.aliases, "and"))
-		self.notice(user, "Level: " + level_as_text(profile.level))
-		if profile.realname:
-			self.notice(user, "Real name: " + profile.realname)
-		if profile.email:
-			self.notice(user, "Email: " + profile.email)
+			return "offline"
 
+	def rolesline(self, profile):
 		roles = defaultdict(list)
 		for chan in self.server.get_all_channels():
 			if not chan.registered:
@@ -1056,22 +1073,62 @@ class Construct(object):
 			if not role is None:
 				roles[role].append(chan.name)
 
-		for role, channels in roles.iteritems():
-			self.notice(user, "User is %s in %s" % (
-				role_as_text(role), make_list(channels, "and")))
+		if roles:
+			roles = make_list(
+						(role_as_text(role) + " in " + make_list(sort(channels), "and")
+							for role, channels in roles.iteritems())
+					, "and")
+		else:
+			roles = "no defined roles on channels"
+		return roles
 
-	@needs_profile
-	def cmd_alias(self, user, profile, cmd, args):
+	def cmd_whois(self, user, cmd, args):
 		""" registered
-		alias <newalias>
-		Add an extra nickname to your profile that can be used to identify """
-		args = args.split()
-		if len(args) != 1:
-			raise IrcMsgException(user, "Can register only one alias at a time")
-		if args[0].lower() in [a.lower() for a in profile.aliases]:
-			raise IrcMsgException(user, "Alias %s already registered" % args[0])
-		profile.add_alias(args[0])
-		# FIXME, allow adding/removing/listing of aliases
+		whois [<nick>]
+		Show the profile currently associated with your session. """
+		nick = args.strip()
+		if nick and user.is_confirmed():
+			profile = None
+
+			# first check current online users
+			nickuser = self.server.get_user(nick)
+			if nickuser:
+				profile = nickuser.profile
+				if not profile:
+					self.notice(user, "User %s is not registered, " +
+							"looking for profile for same nick" % nick)
+			if not profile:
+				profile = self.server.find_profile_by_nickname(nick)
+			if not profile:
+				raise IrcMsgException(user, "No profile for nick '%s'" % nick)
+
+			status = self.online_or_offline(profile)
+			firstline = "%s is %s and " % (nick, status)
+			leveltxt = level_as_text(profile.level)
+			firstline += leveltxt + " as " + profile.register_nick
+		else:
+			if args and nick.lower() != user.nick.lower():
+				raise IrcMsgException(user, "You must have a confirmed account to view others")
+			profile = user.profile
+			leveltxt = level_as_text(profile.level)
+			firstline = "You are %s, %s" % (user.nick, leveltxt)
+			if user.nick != profile.register_nick:
+				firstline += " as " + profile.register_nick
+		firstline += ", " + self.rolesline(profile)
+		self.notice(user, firstline)
+		if profile.is_confirmed():
+			self.notice(user, "Real name: " + (profile.realname or ''))
+			self.notice(user, "Email: " + (profile.email or ''))
+
+	@no_leftover_arguments
+	def cmd_whoami(self, user, cmd):
+		""" guest
+		whoami
+		Show who you are """
+		if user.profile:
+			self.cmd_whois(user, cmd, "")
+		else:
+			self.notice(user, "You are %s, an unregistered guest" % user.nick)
 
 	@no_leftover_arguments
 	def cmd_restart(self, user, cmd):
@@ -1113,25 +1170,27 @@ class Construct(object):
 			raise IrcMsgException(oper, "No roles defined for %s" % chan.name)
 
 		if chan.allow_guests:
-			self.notice(oper, "%s allows guests" % chan.name)
+			guesttxt = "allows"
 		else:
+			guesttxt = "denies"
 			self.notice(oper, "%s denies guests" % chan.name)
+			self.notice(oper, "%s allows guests" % chan.name)
 
 		if chan.default_policy_allow:
-			self.notice(oper, "%s policy is allow" % chan.name)
+			poltxt = "allows"
 		else:
-			self.notice(oper, "%s policy is deny" % chan.name)
+			poltxt = "denies"
+
+		self.notice(oper, "%s %s guests and channel policy %s registered users" % (
+			chan.name, guesttxt, poltxt))
 
 		for profile, role in roles:
-			user = self.server.get_user_for_profile(profile)
-			if user:
-				nick = user.nick
-				online = "online"
-			else:
-				nick = profile.aliases[0]
-				online = "offline"
+			status = self.online_or_offline(profile)
 			role = role_as_text(role)
-			self.notice(oper, "- %s %s %s (%s)" % (chan.name, nick, role, online))
+			self.notice(oper, "- %s %s (%s)" % (
+				profile.register_nick, role, status))
+		self.notice(oper, "total %d role(s) defined for %s" % (
+			len(roles), chan.name))
 
 	@needs_channel
 	def cmd_add(self, oper, chan, cmd, args):
@@ -1203,19 +1262,15 @@ class Construct(object):
 		""" oper
 		profiles
 		Show registered profiles """
-		for prof in self.server.get_all_profiles():
-			user = self.server.get_user_for_profile(prof)
-			if user:
-				nick = user.nick
-				online = "online"
-			else:
-				nick = prof.aliases[0]
-				online = "offline"
+		all_profiles = self.server.get_all_profiles()
+		for prof in all_profiles:
+			status = self.online_or_offline(prof)
 			level = level_as_text(prof.level)
-			rn = ''
-			if prof.realname:
-				rn = "(%s)" % prof.realname
-			self.notice(user, "- %s%s %s (%s)" % (nick, rn, level, online))
+			msg = "%s, %s, %s" % (prof.register_nick, status, level)
+			if prof.is_confirmed():
+				msg += ", %s, %s" % (prof.realname or '', prof.email or '')
+			self.notice(oper, "- %s" % msg)
+		self.notice(oper, "Total %d registered profiles" % len(all_profiles))
 
 	@no_leftover_arguments
 	def cmd_channels(self, user, cmd):
@@ -1337,7 +1392,30 @@ class Construct(object):
 
 		self.notice(user, "OK")
 
-	# FIXME: commando waarmee je kunt zien in welk kanaal je een rol hebt
+
+def main(configfile):
+	try:
+		# FIXME: would like to have the configfile in a similar format as ircd.conf
+		# FIXME: at least some format that allows comments
+		config = json.load(open(configfile))
+		server = Server(**config['server'])
+
+		if 'oper' in config:
+			oper = config['oper']
+			profile = server.create_profile(oper['nick'], oper['password'])
+			profile.realname = oper['realname']
+			profile.level = operlevel
+
+		hand = Handler(server, **config['connect'])
+		hand.connect()
+		hand.read_until_server_connect()
+
+		construct = Construct(server, **config['construct'])
+		construct.introduce()
+		hand.read_all()
+	finally:
+		hand.disconnect()
+
 
 if __name__ == "__main__":
 	FORMAT = '#%(message)s'
@@ -1347,23 +1425,13 @@ if __name__ == "__main__":
 	parser.add_argument('--config', '-c', type=str, help='config file', required=True)
 	args = parser.parse_args()
 
-	# FIXME: would like to have the configfile in a similar format as ircd.conf
-	# FIXME: at least some format that allows comments
-	config = json.load(open(args.config))
-	server = Server(**config['server'])
+	starting = True
+	while starting:
+		starting = False
+		try:
+			main(args.config)
+		except RestartException:
+			starting = True
 
-	if 'oper' in config:
-		oper = config['oper']
-		profile = server.create_profile(oper['nick'], oper['password'])
-		profile.realname = oper['realname']
-		profile.level = operlevel
-
-	hand = Handler(server, **config['connect'])
-	hand.connect()
-	hand.read_until_server_connect()
-
-	construct = Construct(server, **config['construct'])
-	construct.introduce()
-	hand.read_all()
 
 
