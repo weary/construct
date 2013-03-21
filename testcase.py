@@ -133,12 +133,8 @@ def assert_set(s1, s2):
 	assert s1 == s2
 
 if __name__ == "__main__":
+	print "remember! you need to have a 'serveroper' profile with password 'serveroperpass'"
 	serveroper = TestUser("sErveroper", "serverope1", "ServerOper")
-	chanoper = TestUser("cHanoper", "chanoper1", "ChanOper")
-	guest = TestUser("gUest", "guest1", "Guest")
-	allowed = TestUser("aLlowed", "allowed1", "Allowed")
-	banned = TestUser("bAnned", "banned1", "Banned")
-	everyone = [serveroper, chanoper, guest, allowed, banned]
 
 	serveroper.cmd("id serveroperpass")
 	serveroper.cmd("unregister_user chanoper", True)
@@ -149,6 +145,12 @@ if __name__ == "__main__":
 	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
 	serveroper.cmd("unregister_channel #testchan", True)
 	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
+
+	chanoper = TestUser("cHanoper", "chanoper1", "ChanOper")
+	guest = TestUser("gUest", "guest1", "Guest")
+	allowed = TestUser("aLlowed", "allowed1", "Allowed")
+	banned = TestUser("bAnned", "banned1", "Banned")
+	everyone = [serveroper, chanoper, guest, allowed, banned]
 
 	serveroper.join("#soonempty")
 	serveroper.part("#soonempty")
@@ -244,8 +246,11 @@ if __name__ == "__main__":
 	serveroper.cmd("channels")
 	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :- #testchan 1 users (not registered)")
 
+	serveroper.cmd("kill banned")
+
 	serveroper.cmd("help")
 	serveroper.cmd("help channels")
+
 
 	print
 	print "---------------end---------------------"

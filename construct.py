@@ -8,21 +8,16 @@ import traceback
 from collections import defaultdict
 from functools import wraps
 from copy import copy
+
+from construct_database import ConstructDatabase
+from construct_consts import \
+		guestlevel, registeredlevel, confirmedlevel, operlevel, \
+		banrole, allowrole, operrole
+
 log = logging.getLogger('construct')
 
 # FIXME: Should keep profiles/roles in database
 # FIXME: Think of a secure way to keep user-registrations acros restarts
-
-# for profile's
-guestlevel = object()
-registeredlevel = object()
-confirmedlevel = object()
-operlevel = object()
-
-# for channels
-banrole = object()
-allowrole = object()
-operrole = object()
 
 pingre = re.compile("PING :(.*)".replace(' ', '\s+'))
 passre = re.compile("PASS (\S+) TS.*".replace(' ', '\s+'))
@@ -120,6 +115,34 @@ class ChannelDB(object):
 		super(ChannelDB, self).__init__()
 		self.channels = dict()  # name -> channel
 
+	def rehash(self):  # re-read registered channels from db
+		old = self.channels
+		self.channels = dict()
+
+		for name, guests, policy in self.db.get_channels():
+			chan = old.pop(name, None)
+			if not chan:
+				log.info("Rehash: new registered channel: %s" % name)
+				chan = Channel(self, name)
+			chan.registered = True
+			chan.allow_guests = guests
+			chan.default_policy_allow = policy
+			self.channels[name] = chan
+
+		# other channels are not registered
+		for name, chan in old.iteritems():
+			if chan.registered:
+				log.info("Rehash: channel %s is no longer registered" % name)
+				chan.registered = False
+			if chan.users:
+				self.channels[name] = chan
+
+		roles = defaultdict(dict)
+		for chan, profileid, role in self.db.get_roles():
+			roles[chan][profileid] = role
+		for chan, roledict in roles.iteritems():
+			self.channels[chan].roles = roledict
+
 	def get_channel(self, channelname):
 		channelname = channelname.lower()
 		return self.channels.get(channelname)
@@ -170,6 +193,7 @@ def channel_registered(func):
 
 
 class Channel(object):
+	# FIXME: this class should not be case-sensitive
 	def __init__(self, parent, name):
 		# generic
 		self.parent = parent  # the channeldb
@@ -186,9 +210,15 @@ class Channel(object):
 
 	def register(self):
 		self.registered = True
+		self.parent.db.create_channel(
+				self.name, self.allow_guests, self.default_policy_allow)
 
 	def unregister(self):
+		if not self.registered:
+			return
+
 		self.registered = False
+		self.parent.db.delete_channel(self.name)
 		if not self.users:
 			self.parent.channel_empty(self)
 
@@ -201,6 +231,8 @@ class Channel(object):
 	@channel_registered
 	def set_allow_guests(self, oper, allow_):
 		self.allow_guests = allow_
+		self.parent.db.update_channel(
+				self.name, self.allow_guests, self.default_policy_allow)
 
 	@channel_registered
 	def set_policy(self, oper, newpolicy):
@@ -212,19 +244,26 @@ class Channel(object):
 			raise IrcMsgException(
 					oper,
 					"Invalid channel policy '%s'" % newpolicy)
+		self.parent.db.update_channel(
+				self.name, self.allow_guests, self.default_policy_allow)
 
 	@channel_registered
-	def set_role(self, oper, user, role):
-		profile = user.profile
+	def set_role(self, oper, profile, role):
 		if not profile:
-			raise IrcMsgException(oper, "Guest users cannot have roles, %s must register first" % user.nick)
+			raise IrcMsgException(oper, "Guest users cannot have roles, must register first")
 		if role:
+			is_new = profile.profileid in self.roles
 			self.roles[profile.profileid] = role
+			if is_new:
+				self.parent.db.create_role(self.name, profile.profileid, role)
+			else:
+				self.parent.db.update_role(self.name, profile.profileid, role)
 		else:
 			del self.roles[profile.profileid]
+			self.parent.db.delete_role(self.name, profile.profileid)
 
-	def del_role(self, oper, user):
-		self.set_role(oper, user, None)
+	def del_role(self, oper, profile):
+		self.set_role(oper, profile, None)
 
 	@channel_registered
 	def get_roles(self, oper):
@@ -386,7 +425,8 @@ class Channel(object):
 
 
 class Profile(object):
-	def __init__(self, id_, nickname, password):
+	def __init__(self, parent, id_, nickname, password):
+		self.parent = parent
 		self.profileid = id_
 		self.register_nick = nickname
 		self.level = registeredlevel  # if we have a profile we are registered
@@ -404,22 +444,54 @@ class Profile(object):
 		self.level = confirmedlevel
 		self.realname = realname
 		self.email = email
+		self.update_db()
 
 	def unconfirm(self):
 		self.level = registeredlevel
 		self.realname = None
 		self.email = None
+		self.update_db()
 
 	def is_confirmed(self):
 		return self.level is operlevel or self.level is confirmedlevel
+
+	def update_db(self):
+		self.parent.db.update_profile(
+				self.profileid, self.register_nick, self.level, self.password,
+				self.realname, self.email)
 
 
 class ProfileDB(object):
 	def __init__(self):
 		super(ProfileDB, self).__init__()
 		self.profiles = list()
-
 		self.next_id = 1
+
+	def rehash(self):
+		old = {p.profileid:p for p in self.profiles}
+		self.profiles = list()
+		self.next_id = 1
+		for id_, nick, lvl, pwd, rn, email in self.db.get_profiles():
+			if id_ >= self.next_id:
+				self.next_id = id_ + 1
+			prof = old.pop(id_, None)
+			if not prof:
+				log.info("Rehash: new registered profile: %s" % nick)
+				prof = Profile(self, id_, nick, pwd)
+			prof.register_nick = nick
+			prof.level = lvl
+			prof.password = pwd
+			prof.realname = rn
+			prof.email = email
+			self.profiles.append(prof)
+
+		# any profiles lost from database?
+		for prof in old.itervalues():
+			log.info("Rehash: removed profile %s" % prof.register_nick)
+			user = self.server.get_user_for_profile(prof)
+			if user:
+				log.info("Rehash: user %s unidentified due to lost profile" % user.nick)
+				user.unidentify()
 
 	def find_profile_by_nickname(self, nickname):
 		nickname = nickname.lower()
@@ -438,20 +510,22 @@ class ProfileDB(object):
 	def create_profile(self, nickname, password):
 		id_ = self.next_id
 		self.next_id += 1
-		p = Profile(id_, nickname, password)
+		p = Profile(self, id_, nickname, password)
 		self.profiles.append(p)
+		self.db.create_profile(
+				p.profileid, p.register_nick, p.level, p.password)
 		return p
 
 	def drop_profile(self, profile):
 		self.profiles = [p for p in self.profiles
 				if p != profile]
+		self.db.delete_profile(profile.profileid)
 
 	def get_all_profiles(self):
 		return self.profiles
 
 
 class UserDB(object):
-	# FIXME: this class should not be case-sensitive
 	def __init__(self):
 		super(UserDB, self).__init__()
 		self.users = list()
@@ -509,7 +583,7 @@ class UserDB(object):
 
 	def kill_user(self, user, reason):
 		log.info("User %s killed, %s", user.nick, reason)
-		self.send("KILL %s :%s" % (user.nick, reason))
+		self.send("KILL %s :HOP %s" % (user.nick, reason))
 		self.remove_user(user)
 
 
@@ -542,6 +616,15 @@ class Server(UserDB, ChannelDB, ProfileDB):
 		self.description = description
 		self.handler = None
 		self.construct = None
+		self.db = ConstructDatabase("construct.db")
+
+	def rehash(self):
+		log.info("Starting rehash")
+		ChannelDB.rehash(self)
+		ProfileDB.rehash(self)
+		for chan in self.get_all_channels():
+			chan.fix_all_users()
+		log.info("Done rehash")
 
 	def set_handler(self, han):
 		self.handler = han
@@ -798,9 +881,12 @@ class Handler(object):
 def needs_profile(func):
 	@wraps(func)
 	def find_profile(self, user, *args):
-		profile = self.server.find_profile_by_nickname(user.nick)
+		profile = user.profile
 		if not profile:
-			raise IrcMsgException(user, "No profiles registered for %s, not identified" % user.nick)
+			raise IrcMsgException(
+					user,
+					"No profiles registered for %s, " % user.nick +
+					"not identified")
 		func(self, user, profile, *args)
 	return find_profile
 
@@ -872,6 +958,8 @@ class Construct(object):
 				self.commands.append((cmdname, minauth, func, docu))
 		self.commands.sort()
 
+		server.rehash()  # read initial state from database
+
 	def introduce(self):
 		handler = self.server.handler
 		now = int(time.time())
@@ -896,9 +984,25 @@ class Construct(object):
 		msg = ":%s %s" % (self.nick, msg)
 		handler.send(msg)
 
+	def find_a_profile_for_nick(self, asker, nick):
+		user = self.server.get_user(nick)
+		profile = self.server.find_profile_by_nickname(nick)
+		if user and profile:
+			if user.profile is profile:
+				return profile  # identified user
+			raise IrcMsgException(asker,
+					"Conflicting profile and logged-in user found for '%s'" % nick)
+		if profile:
+			return profile
+		if user and user.profile:
+			return user.profile
+		raise IrcMsgException(asker, "No profile found for '%s'" % nick)
+
+
 	@fix_user_on_channels_afterwards
 	def cmd_identify(self, user, cmd, args):
-		""" guest identify [<nick>] <password>
+		""" guest
+		identify [<nick>] <password>
 		Tell the server who you are, binding an earlier
 		registered profile to your current session """
 		args = [arg.strip() for arg in args.split()]
@@ -932,10 +1036,17 @@ class Construct(object):
 	@no_leftover_arguments
 	def cmd_unidentify(self, user, cmd):
 		""" registered
-		unidentify <password>
+		unidentify
 		Stop associating your current profile with this
 		session. Probably only usefull in debugging """
 		user.unidentify()
+
+	def cmd_reidentify(self, user, cmd, args):
+		""" registered
+		reidentify [<nick>] <password>
+		identify as a different user, short for unidentify/identify """
+		user.unidentify()
+		self.cmd_identify(user, cmd, args)
 
 	@fix_user_on_channels_afterwards
 	def cmd_register_user(self, user, cmd, args):
@@ -949,6 +1060,8 @@ class Construct(object):
 		password = args.strip()
 		if not password:
 			raise IrcMsgException(user, "Please specify password")
+		if password.find(' ') >= 0:
+			raise IrcMsgException(user, "No spaces allowed in password")
 		newprofile = self.server.create_profile(user.nick, password)
 		self.notice(user, "Successfully registered %s, please remember your password to identify next time" % user.nick)
 		user.identify(newprofile)
@@ -965,24 +1078,22 @@ class Construct(object):
 		if callerprofile.level is operlevel:
 			if len(args) != 1:
 				raise IrcMsgException(caller, "Server operators should only specify a nickname")
-			profile = self.server.find_profile_by_nickname(args[0])
-			if not profile:
-				raise IrcMsgException(caller, "No profile for nick '%s'" % args[0])
+			profile = self.find_a_profile_for_nick(caller, args[0])
 			if profile is callerprofile:
 				raise IrcMsgException(caller, "Server operators cannot unregister their own profile")
 		else:
 			if len(args) == 2:
 				pwd = args[1]
-				profile = self.server.find_profile_by_nickname(args[0])
-				if not profile:
-					raise IrcMsgException(caller, "No profile for nick '%s'" % args[0])
+				profile = self.find_a_profile_for_nick(caller, args[0])
 				if not profile is callerprofile:
 					raise IrcMsgException(caller, "You can only unregister your own profile")
 			else:
 				pwd = args[0]
 				profile = callerprofile
-			profile.test_password(pwd)
+			if not profile.test_password(pwd):
+				raise IrcMsgException("Password invalid")
 
+		# FIXME: make sure we don't throw away the last server oper
 		user = self.server.get_user_for_profile(profile)
 		if user:
 			user.unidentify()
@@ -999,7 +1110,7 @@ class Construct(object):
 		except ValueError:
 			raise IrcMsgException("Invalid arguments, need nickname and new password")
 
-		profile = self.server.find_profile_by_nickname(nick)
+		profile = self.find_profile_by_nickname(nick)
 		if not profile:
 			raise IrcMsgException("No profile found for '%s'" % nick)
 		profile.reset_password(newpass)
@@ -1009,7 +1120,6 @@ class Construct(object):
 		""" registered
 		passwd <oldpass> <newpass>
 		Change password for current profile """
-		profile = user.profile
 		try:
 			oldpass, newpass = args.split(' ')
 		except ValueError:
@@ -1029,9 +1139,7 @@ class Construct(object):
 			raise IrcMsgException(oper, "need: <nick> <realname> <email>")
 		nick, realname, email = r.groups()
 
-		profile = self.server.find_profile_by_nickname(nick)
-		if not profile:
-			raise IrcMsgException(oper, "No profile found for '%s'" % nick)
+		profile = self.find_a_profile_for_nick(oper, nick)
 
 		profile.confirm(realname, email)
 		user = self.server.get_user(nick)
@@ -1044,9 +1152,7 @@ class Construct(object):
 		For undoing 'confirm' """
 		# FIXME: check if we are not downgrading last serveroper
 		nick = args.strip()
-		profile = self.server.find_profile_by_nickname(nick)
-		if not profile:
-			raise IrcMsgException(oper, "No profile found for '%s'" % nick)
+		profile = self.find_a_profile_for_nick(oper, nick)
 
 		profile.unconfirm()
 
@@ -1088,19 +1194,7 @@ class Construct(object):
 		Show the profile currently associated with your session. """
 		nick = args.strip()
 		if nick and user.is_confirmed():
-			profile = None
-
-			# first check current online users
-			nickuser = self.server.get_user(nick)
-			if nickuser:
-				profile = nickuser.profile
-				if not profile:
-					self.notice(user, "User %s is not registered, " +
-							"looking for profile for same nick" % nick)
-			if not profile:
-				profile = self.server.find_profile_by_nickname(nick)
-			if not profile:
-				raise IrcMsgException(user, "No profile for nick '%s'" % nick)
+			profile = self.find_a_profile_for_nick(user, nick)
 
 			status = self.online_or_offline(profile)
 			firstline = "%s is %s and " % (nick, status)
@@ -1130,13 +1224,6 @@ class Construct(object):
 		else:
 			self.notice(user, "You are %s, an unregistered guest" % user.nick)
 
-	@no_leftover_arguments
-	def cmd_restart(self, user, cmd):
-		""" oper
-		restart
-		Restart the construct. Use with care. """
-		raise RestartException()
-
 	@needs_channel
 	@no_leftover_arguments
 	def cmd_register_channel(self, user, chan, cmd):
@@ -1146,7 +1233,7 @@ class Construct(object):
 		if chan.registered:
 			raise IrcMsgException(user, "Channel '%s' is already registered" % chan.name)
 		chan.register()
-		chan.set_role(user, user, operrole)
+		chan.set_role(user, user.profile, operrole)
 		chan.fix_all_users()
 
 	@needs_channel
@@ -1203,12 +1290,12 @@ class Construct(object):
 		if not r:
 			raise IrcMsgException(oper, "Argument error, need nick and 'ban', 'allow' or 'oper'")
 		nick, newrole = r.groups()
-		user = self.server.get_user(nick)
-		if not user:
-			raise IrcMsgException(oper, "No such nick '%s'" % nick)
+		profile = self.find_a_profile_for_nick(oper, nick)
 		newrole = {'ban': banrole, 'allow': allowrole, 'oper': operrole}[newrole]
-		chan.set_role(oper, user, newrole)
-		chan.fix_user_to_role(user)
+		chan.set_role(oper, profile, newrole)
+		user = self.server.get_user_for_profile(profile)
+		if user:
+			chan.fix_user_to_role(user)
 
 	@needs_channel
 	def cmd_del(self, oper, chan, cmd, args):
@@ -1216,11 +1303,11 @@ class Construct(object):
 		del <chan> <nick>
 		delete a role for a given user from a channel"""
 		nick = args.strip()
-		user = self.server.get_user(nick)
-		if not user:
-			raise IrcMsgException(oper, "No such nick '%s'" % nick)
-		chan.del_role(oper, user)
-		chan.fix_user_to_role(user)
+		profile = self.find_a_profile_for_nick(oper, nick)
+		chan.del_role(oper, profile)
+		user = self.server.get_user_for_profile(profile)
+		if user:
+			chan.fix_user_to_role(user)
 
 	def cmd_mod(self, oper, cmd, args):
 		""" chanoper
@@ -1287,6 +1374,32 @@ class Construct(object):
 				registered = "not registered"
 			self.notice(user, "- %s %d users (%s)" % (
 				chan.name, chan.usercount(), registered))
+
+	@no_leftover_arguments
+	def cmd_restart(self, user, cmd):
+		""" oper
+		restart
+		Restart the construct. Use with care. """
+		raise RestartException()
+
+	def cmd_kill(self, oper, cmd, args):
+		""" oper
+		kill <nick>
+		Remove someone from the irc server (beware of auto-reconnect) """
+		if args.find(' ') >= 0:
+			raise IrcMsgException("Too many arguments, expected only a nickname")
+		nick = args
+		user = self.server.get_user(nick)
+		if not user:
+			raise IrcMsgException(oper, "No such nick '%s'" % nick)
+		self.server.kill_user(user, "killed by %s" % oper.nick)
+
+	@no_leftover_arguments
+	def cmd_rehash(self, user, cmd):
+		""" oper
+		rehash
+		re-read profiles/channels/roles from database and update state """
+		self.server.rehash()
 
 	def cmd_help(self, user, cmd, args):
 		""" guest
@@ -1394,24 +1507,29 @@ class Construct(object):
 
 
 def main(configfile):
+	# FIXME: would like to have the configfile in a similar format as ircd.conf
+	# FIXME: at least some format that allows comments
+	config = json.load(open(configfile))
+	server = Server(**config['server'])
+
+	hand = Handler(server, **config['connect'])
+	hand.connect()
 	try:
-		# FIXME: would like to have the configfile in a similar format as ircd.conf
-		# FIXME: at least some format that allows comments
-		config = json.load(open(configfile))
-		server = Server(**config['server'])
-
-		if 'oper' in config:
-			oper = config['oper']
-			profile = server.create_profile(oper['nick'], oper['password'])
-			profile.realname = oper['realname']
-			profile.level = operlevel
-
-		hand = Handler(server, **config['connect'])
-		hand.connect()
 		hand.read_until_server_connect()
 
 		construct = Construct(server, **config['construct'])
 		construct.introduce()
+
+		if 'oper' in config:  # insert initial user into database
+			oper = config['oper']
+			profile = server.find_profile_by_nickname(oper['nick'])
+			if not profile:
+				profile = server.create_profile(oper['nick'], oper['password'])
+			profile.level = operlevel
+			profile.password = oper['password']
+			profile.realname = oper['realname']
+			profile.update_db()
+
 		hand.read_all()
 	finally:
 		hand.disconnect()
