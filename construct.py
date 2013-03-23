@@ -1563,7 +1563,7 @@ def main(configfile):
 
 if __name__ == "__main__":
 	FORMAT = '#%(message)s'
-	logging.basicConfig(level=logging.DEBUG, format=FORMAT)
+	logging.basicConfig(level=logging.INFO, format=FORMAT)
 
 	parser = argparse.ArgumentParser(description='(More) secure irc user management')
 	parser.add_argument('--config', '-c', type=str, help='config file', required=True)
