@@ -5,6 +5,9 @@ import logging
 import re
 import time
 import traceback
+import base64
+import hashlib
+import os
 from collections import defaultdict
 from functools import wraps
 from copy import copy
@@ -430,18 +433,51 @@ class Profile(object):
 		self.profileid = id_
 		self.register_nick = nickname
 		self.level = registeredlevel  # if we have a profile we are registered
-		self.password = password
+		self.password = None
+		self.last_password_guess_time = 0
 		self.realname = None
 		self.email = None
+		if password[:3] == '$C$':
+			self.password = password
+		else:
+			log.warning("Password for %s was not encrypted. fixing.." % nickname)
+			self.reset_password(password)
 
-	def test_password(self, password):
-		return self.password == password
+	@staticmethod
+	def getDigest(password, salt=None):
+		if not salt:
+			salt = base64.b64encode(os.urandom(32))
+		digest = hashlib.sha256(salt + password).hexdigest()
+		for x in range(0, 100001):
+			digest = hashlib.sha256(digest).hexdigest()
+		return salt, digest
+
+	def test_password(self, testpass, caller, msg=None):
+		""" will throw on invalid password """
+		now = time.time()
+		timeout = self.parent.password_timeout
+		if now - self.last_password_guess_time < timeout:
+			raise IrcMsgException(
+					caller,
+					"Error, wait %s seconds between password guess attempts" % timeout)
+		self.last_password_guess_time = now
+		assert self.password[:3] == '$C$'
+		salt, digest = self.password[3:].split('$', 1)
+		if digest != Profile.getDigest(testpass, salt)[1]:
+			if msg is None:
+				msg = "Error, invalid password for '%s'" % self.register_nick
+			raise IrcMsgException(caller, msg)
 
 	def reset_password(self, newpass):
-		self.password = newpass
+		if newpass[:3] != '$C$':
+			newpass = '$C$' + '$'.join(Profile.getDigest(newpass))
+		if newpass != self.password:
+			self.password = newpass
+			self.update_db()
 
 	def confirm(self, realname, email):
-		self.level = confirmedlevel
+		if not self.level is operlevel:
+			self.level = confirmedlevel
 		self.realname = realname
 		self.email = email
 		self.update_db()
@@ -480,7 +516,7 @@ class ProfileDB(object):
 				prof = Profile(self, id_, nick, pwd)
 			prof.register_nick = nick
 			prof.level = lvl
-			prof.password = pwd
+			prof.reset_password(pwd)
 			prof.realname = rn
 			prof.email = email
 			self.profiles.append(prof)
@@ -608,15 +644,16 @@ class User(object):
 
 
 class Server(UserDB, ChannelDB, ProfileDB):
-	def __init__(self, name, description):
+	def __init__(self, conf):
 		super(Server, self).__init__()
-		self.name = name
-		if name.find('.') < 0:
-			raise Exception("server name('%s') must contain a dot" % name)
-		self.description = description
+		self.name = conf['name']
+		if self.name.find('.') < 0:
+			raise Exception("server name('%s') must contain a dot" % self.name)
+		self.description = conf.get('description', '')
 		self.handler = None
 		self.construct = None
 		self.db = ConstructDatabase("construct.db")
+		self.password_timeout = conf.get('password_timeout', 30)
 
 	def rehash(self):
 		log.info("Starting rehash")
@@ -897,15 +934,6 @@ def needs_channel(func):
 		func(self, user, chan, cmd, rest)
 	return find_channel
 
-def test_arg_as_password(func):
-	@wraps(func)
-	def test_arg_password(self, user, profile, cmd, args):
-		if not profile.test_password(args.strip()):
-			# FIXME: set timeout before retry
-			raise IrcMsgException(user, "Invalid password")
-		func(self, user, profile, cmd)
-	return test_arg_password
-
 def fix_user_on_channels_afterwards(func):
 	@wraps(func)
 	def fix_user_afterwards_wrapper(self, user, *args):
@@ -1016,8 +1044,7 @@ class Construct(object):
 		profile = self.server.find_profile_by_nickname(nick)
 		if not profile:
 			raise IrcMsgException(user, "No profile for %s, please register first" % nick)
-		if not profile.test_password(pwd):
-			raise IrcMsgException(user, "Invalid password for %s" % nick)
+		profile.test_password(pwd, user)
 
 		self.notice(user, "Successfully identified as %s" %
 				profile.realname or profile.register_nick)
@@ -1124,8 +1151,7 @@ class Construct(object):
 			oldpass, newpass = args.split(' ')
 		except ValueError:
 			raise IrcMsgException("Need old password and new password")
-		if not profile.test_password(oldpass):
-			raise IrcMsgException("Old password invalid")
+		profile.test_password(oldpass, user, "Error, old password invalid")
 		profile.reset_password(newpass)
 
 	def cmd_confirm(self, oper, cmd, args):
@@ -1133,14 +1159,14 @@ class Construct(object):
 		confirm <nick> <realname> <email>
 		Confirm a registered user really is who he says he is """
 		# FIXME: allow last argument to specify serveroper
-		# FIXME: check if we are not downgrading last serveroper
 		r = re.match('(\S+)\s+(.*)\s+(\S+@\S+)', args.strip())
 		if not r:
 			raise IrcMsgException(oper, "need: <nick> <realname> <email>")
 		nick, realname, email = r.groups()
+		if realname[:1] == realname [-1:] and realname[:1] in "\"'":
+			realname = realname[1:-1]
 
 		profile = self.find_a_profile_for_nick(oper, nick)
-
 		profile.confirm(realname, email)
 		user = self.server.get_user(nick)
 		if user:
@@ -1510,7 +1536,7 @@ def main(configfile):
 	# FIXME: would like to have the configfile in a similar format as ircd.conf
 	# FIXME: at least some format that allows comments
 	config = json.load(open(configfile))
-	server = Server(**config['server'])
+	server = Server(config['server'])
 
 	hand = Handler(server, **config['connect'])
 	hand.connect()
@@ -1526,8 +1552,8 @@ def main(configfile):
 			if not profile:
 				profile = server.create_profile(oper['nick'], oper['password'])
 			profile.level = operlevel
-			profile.password = oper['password']
 			profile.realname = oper['realname']
+			profile.reset_password(oper['password'])
 			profile.update_db()
 
 		hand.read_all()
