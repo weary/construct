@@ -13,7 +13,7 @@ from functools import wraps
 from copy import copy
 
 from construct_database import ConstructDatabase
-from construct_commandcontainer import CommandContainer
+from construct_commandcontainer import CommandContainer, ParseException
 from construct_consts import \
 		guestlevel, registeredlevel, confirmedlevel, operlevel, \
 		banrole, allowrole, operrole
@@ -133,8 +133,8 @@ class ChannelDB(object):
 		roles = defaultdict(dict)
 		for chan, profileid, role in self.db.get_roles():
 			roles[chan][profileid] = role
-		for chan, roledict in roles.iteritems():
-			self.channels[chan].roles = roledict
+		for chan in self.get_all_channels():
+			chan.roles = roles.get(chan.name, {})
 
 	def get_channel(self, channelname):
 		channelname = channelname.lower()
@@ -245,12 +245,8 @@ class Channel(object):
 		if not profile:
 			raise IrcMsgException(oper, "Guest users cannot have roles, must register first")
 		if role:
-			is_new = profile.profileid in self.roles
 			self.roles[profile.profileid] = role
-			if is_new:
-				self.parent.db.create_role(self.name, profile.profileid, role)
-			else:
-				self.parent.db.update_role(self.name, profile.profileid, role)
+			self.parent.db.create_role(self.name, profile.profileid, role)
 		else:
 			del self.roles[profile.profileid]
 			self.parent.db.delete_role(self.name, profile.profileid)
@@ -263,6 +259,8 @@ class Channel(object):
 		out = []
 		for profileid, role in self.roles.iteritems():
 			profile = self.parent.find_profile_by_id(profileid)
+			if not profile:
+				raise Exception("self.roles broken in channel %s" % self.name)
 			out.append((profile, role))
 
 		return out
@@ -458,13 +456,13 @@ class Profile(object):
 		if now - self.last_password_guess_time < timeout:
 			raise IrcMsgException(
 					caller,
-					"Error, wait %s seconds between password guess attempts" % timeout)
+					"error, wait %s seconds between password guess attempts" % timeout)
 		self.last_password_guess_time = now
 		assert self.password[:3] == '$C$'
 		salt, digest = self.password[3:].split('$', 1)
 		if digest != Profile.getDigest(testpass, salt)[1]:
 			if msg is None:
-				msg = "Error, invalid password for '%s'" % self.register_nick
+				msg = "error, invalid password for '%s'" % self.register_nick
 			raise IrcMsgException(caller, msg)
 
 	def reset_password(self, newpass):
@@ -971,7 +969,7 @@ class Construct(object):
 		if args and 'chan' in args:
 			chan = self.server.get_channel(args['chan'])
 			if not chan:
-				raise Exception("unknown channel '%s'" % args['chan'])
+				raise IrcMsgException(user, "unknown channel '%s'" % args['chan'])
 			args['chan'] = chan
 
 		if cmd.minauth is guestlevel:
@@ -979,7 +977,7 @@ class Construct(object):
 
 		userlevel = user.level()
 		if userlevel is guestlevel:
-			raise Exception("guests access not allowed, please identify/register")
+			raise IrcMsgException(user, "guests access not allowed, please identify/register")
 		assert (
 				userlevel is registeredlevel or
 				userlevel is confirmedlevel or
@@ -995,7 +993,7 @@ class Construct(object):
 				if not chan:
 					raise Exception("no channel found in arguments")
 				if not chan.find_role(user) is operrole:
-					raise Exception("'%s' is not channel operator on '%s'" % (
+					raise IrcMsgException(user, "'%s' is not a channel operator on '%s'" % (
 						user.nick, chan.name))
 			else:
 				assert args is None
@@ -1104,7 +1102,7 @@ class Construct(object):
 		profile.test_password(password, caller)
 
 		self.notice(caller, "Successfully identified as %s" %
-				profile.realname or profile.register_nick)
+				(profile.realname or profile.register_nick))
 
 		# someone else already using this profile??
 		user_ = self.server.get_user_for_profile(profile)
@@ -1122,7 +1120,11 @@ class Construct(object):
 		1.2 reidentify [<nick>] <password>
 		identify as a different user, short for unidentify/identify """
 		caller.unidentify()
-		self.cmd_identify(caller, cmd, nick, password)
+		try:
+			self.cmd_identify(caller, cmd, nick, password)
+		except:
+			self.notice(caller, "you are now not identified")
+			raise
 
 	@fix_caller_afterwards
 	def cmd_unidentify(self, caller, cmd):
@@ -1455,9 +1457,14 @@ class Construct(object):
 		msg = msg.strip()
 		try:
 			cmd, args = self.commands.parse_cmdline(msg, caller, forhelp=False)
+		except ParseException, e:
+			raise IrcMsgException(caller, "syntax error, " + str(e))
+		except IrcMsgException:
+			raise
 		except Exception, e:
 			log.info("%s failed command %s: %s" % (caller.nick, msg, e))
-			raise IrcMsgException(caller, str(e))
+			self.notice(caller,"internal error")
+			raise
 
 		log.debug("%s used command %s(%s)" % (caller.nick, cmd.funcname,
 			', '.join("%s=%s" % tup for tup in args.iteritems())))
@@ -1509,6 +1516,7 @@ if __name__ == "__main__":
 		try:
 			main(args__.config)
 		except RestartException:
+			# FIXME: should exec here
 			starting = True
 
 

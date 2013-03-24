@@ -117,7 +117,14 @@ class Arguments(object):
 		return ' '.join(str(i) for i in self.args).strip()
 
 	def parse(self, argstringlist):
-		return self.args[0].parse(argstringlist, self.args[1:])
+		try:
+			return self.args[0].parse(argstringlist, self.args[1:])
+		except ParseException, e:
+			if len(self.args) > 1:
+				raise ParseException(str(e) + ", expected " + str(self))
+			else:
+				raise ParseException(str(e) + ", expected no arguments")
+
 
 
 ConstructCommand = namedtuple(

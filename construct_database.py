@@ -134,12 +134,8 @@ class ConstructDatabase(object):
 					"select channel, profile, type from roles")]
 
 	def create_role(self, channel, profile, roletype):
-		self.qry("insert into roles(channel, profile, type) values(?, ?, ?)", (
+		self.qry("insert or replace into roles(channel, profile, type) values(?, ?, ?)", (
 				(channel, profile, role_to_db(roletype))))
-
-	def update_role(self, channel, profile, roletype):
-		self.qry("update roles set type=? where channel=? and profile=?",
-				(role_to_db(roletype), channel, profile))
 
 	def delete_role(self, channel, profile):
 		self.qry("delete from roles where channel=? and profile=?",
