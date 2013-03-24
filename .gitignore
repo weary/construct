@@ -25,6 +25,7 @@ pip-log.txt
 .coverage
 .tox
 nosetests.xml
+*.log
 
 # Translations
 *.mo
@@ -33,3 +34,9 @@ nosetests.xml
 .mr.developer.cfg
 .project
 .pydevproject
+
+# vim
+.*.swp
+
+# databases
+*.db

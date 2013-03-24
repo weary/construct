@@ -137,13 +137,13 @@ if __name__ == "__main__":
 	serveroper = TestUser("sErveroper", "serverope1", "ServerOper")
 
 	serveroper.cmd("id serveroperpass")
-	serveroper.cmd("unregister_user chanoper", True)
+	serveroper.cmd("unregister user chanoper", True)
 	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
-	serveroper.cmd("unregister_user allowed", True)
+	serveroper.cmd("unregister user allowed", True)
 	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
-	serveroper.cmd("unregister_user banned", True)
+	serveroper.cmd("unregister user banned", True)
 	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
-	serveroper.cmd("unregister_channel #testchan", True)
+	serveroper.cmd("channel unregister #testchan", True)
 	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
 
 	chanoper = TestUser("cHanoper", "chanoper1", "ChanOper")
@@ -155,10 +155,10 @@ if __name__ == "__main__":
 	serveroper.join("#soonempty")
 	serveroper.part("#soonempty")
 
-	allowed.cmd("register_user allowedpass")
-	banned.cmd("register_user bannedpass")
+	allowed.cmd("register user allowedpass")
+	banned.cmd("register user bannedpass")
 
-	chanoper.cmd("register_user chanoperpass")
+	chanoper.cmd("register user chanoperpass")
 	serveroper.cmd("confirm %s Channel -Confirmed- Operator chanoper@someemail" % chanoper.nick)
 	chanoper.cmd("whoami")
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :You are cHanoper, confirmed, no defined roles")
@@ -179,7 +179,7 @@ if __name__ == "__main__":
 	serveroper.cmd("unconfirm %s" % allowed.nick)
 
 	chanoper.join("#testchan")
-	chanoper.cmd("register_channel #testchan")
+	chanoper.cmd("channel register #testchan")
 
 	# no roles/policy/etc, everyone can join
 	guest.join('#testchan')
@@ -200,30 +200,30 @@ if __name__ == "__main__":
 	chanoper.kick('#testchan', chanoper.nick)
 	chanoper.join('#testchan')
 
-	chanoper.cmd("guests #testchan deny")
+	chanoper.cmd("channel guests #testchan deny")
 	guest.wait_for_line(":construct!-@- KICK #testchan gUest :Restricted channel")
 	chanoper.wait_for_line(":construct!-@- KICK #testchan gUest :Restricted channel")
 	guest.join('#testchan')
 	guest.wait_for_line(":construct!-@- KICK #testchan gUest :Restricted channel")
 	chanoper.wait_for_line(":construct!-@- KICK #testchan gUest :Restricted channel")
 
-	chanoper.cmd("add #testchan banned ban")
+	chanoper.cmd("channel ban #testchan banned")
 	banned.wait_for_line(":construct!-@- KICK #testchan bAnned :Restricted channel")
 	chanoper.wait_for_line(":construct!-@- KICK #testchan bAnned :Restricted channel")
 	banned.join('#testchan')
 	banned.wait_for_line(":construct!-@- KICK #testchan bAnned :Restricted channel")
 	chanoper.wait_for_line(":construct!-@- KICK #testchan bAnned :Restricted channel")
 
-	chanoper.cmd("policy #testchan deny")
+	chanoper.cmd("channel policy #testchan deny")
 	allowed.wait_for_line(":construct!-@- KICK #testchan aLlowed :Restricted channel")
 	chanoper.wait_for_line(":construct!-@- KICK #testchan aLlowed :Restricted channel")
 	assert chanoper.names('#testchan') == set(['@cHanoper'])
-	chanoper.cmd("add #testchan allowed allow")
+	chanoper.cmd("channel allow #testchan allowed")
 	allowed.join('#testchan')
 	chanoper.wait_for_line(":aLlowed!allowed1@i.love.debian.org JOIN :#testchan")
 	assert chanoper.names('#testchan') == set(['@cHanoper', 'aLlowed'])
-	chanoper.cmd("mod #testchan allowed oper")
-	chanoper.cmd("mod #testchan chanoper allow")
+	chanoper.cmd("channel oper #testchan allowed")
+	chanoper.cmd("channel allow #testchan chanoper")
 	chanoper.wait_for_line(":construct!-@- MODE #testchan -o cHanoper")
 	serveroper.cmd("whois chanoper")
 	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :chanoper is online and confirmed as cHanoper, allowed in #testchan")
@@ -231,25 +231,27 @@ if __name__ == "__main__":
 	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :allowed is online and registered as aLlowed, oper in #testchan")
 	serveroper.cmd("whois banned")
 	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :banned is online and registered as bAnned, banned in #testchan")
-	allowed.cmd("del #testchan chanoper")
+	allowed.cmd("channel reset #testchan chanoper")
 
-	serveroper.cmd("profiles")
-	serveroper.cmd("channels")
+	serveroper.cmd("list profiles")
+	serveroper.cmd("list channels")
 	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :- #testchan 1 users (registered)")
-	serveroper.cmd("roles #testchan")
-	chanoper.cmd("roles #testchan", True)
-	chanoper.wait_for_line(":construct!-@- NOTICE %s :Access denied" % chanoper.nick)
-	allowed.cmd("roles #testchan")
+	serveroper.cmd("channel roles #testchan")
+	chanoper.cmd("channel roles #testchan", True)
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :'cHanoper' is not channel operator on '#testchan'")
+
+	allowed.cmd("channel roles #testchan")
 	assert allowed.names('#testchan') == set(['@aLlowed'])
 
-	allowed.cmd("unregister_channel #testchan")
-	serveroper.cmd("channels")
+	allowed.cmd("channel unregister #testchan")
+	serveroper.cmd("list channels")
 	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :- #testchan 1 users (not registered)")
+
 
 	serveroper.cmd("kill banned")
 
 	serveroper.cmd("help")
-	serveroper.cmd("help channels")
+	serveroper.cmd("help list channels")
 
 
 	print

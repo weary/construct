@@ -13,6 +13,7 @@ from functools import wraps
 from copy import copy
 
 from construct_database import ConstructDatabase
+from construct_commandcontainer import CommandContainer
 from construct_consts import \
 		guestlevel, registeredlevel, confirmedlevel, operlevel, \
 		banrole, allowrole, operrole
@@ -36,18 +37,6 @@ kickre = re.compile(':\S+ KICK (\S+) (\S+) :(.*)'.replace(' ', '\s+'))
 modere = re.compile(':\S+ MODE (\S+) ([-+]\S+) (\S+)'.replace(' ', '\s+'))
 quitre = re.compile(":(\S+) QUIT :(.*)".replace(' ', '\s+'))
 privmsgre = re.compile(":(\S+) PRIVMSG (\S+) :(.*)".replace(' ', '\s+'))
-
-def level_as_text(level):
-	if level is guestlevel:
-		return "guest"
-	elif level is registeredlevel:
-		return "registered"
-	elif level is confirmedlevel:
-		return "confirmed"
-	elif level is operlevel:
-		return "server operator"
-	else:
-		assert False
 
 def role_as_text(role):
 	if role is banrole:
@@ -123,6 +112,7 @@ class ChannelDB(object):
 		self.channels = dict()
 
 		for name, guests, policy in self.db.get_channels():
+			name = name.lower()
 			chan = old.pop(name, None)
 			if not chan:
 				log.info("Rehash: new registered channel: %s" % name)
@@ -154,7 +144,7 @@ class ChannelDB(object):
 		channelname = channelname.lower()
 		channel = self.channels.get(channelname)
 		if not channel:
-			log.info("creating channel %s" % channelname)
+			log.debug("creating channel %s" % channelname)
 			channel = Channel(self, channelname)
 			self.channels[channelname] = channel
 		return channel
@@ -288,33 +278,40 @@ class Channel(object):
 			self.fix_user_to_role(user)
 
 	def fix_user_to_role(self, user):
-		print "fixing %s on %s" % (user.nick, self.name)
-		print "known users:", ", ".join(u.nick for u in self.users)
 		# check if a user (who is currently in the channel) is
 		# allowed and has the right mode. And correct if wrong
 
 		if not self.registered:
-			print "fixing - not registered"
+			log.debug("not fixing %s on %s, channel not registered" % (
+				user.nick, self.name))
 			return  # not doing anything for channels nobody cares about
 
 		if not self.allow_guests and not user.profile:
-			print "fixing - guests not allowed"
+			log.debug("removing %s from %s, guests not allowed on channel" % (
+				user.nick, self.name))
 			self.remove_user(user, "guests not allowed")
+			return
 
 		role = self.find_role(user)
 		mode = self.users.get(user)
 		if mode is None:
-			print "fixing - user not in channel"
+			log.debug("not fixing %s on %s, user is not in channel" % (
+				user.nick, self.name))
 			return
 
-		print "fixing - role =", role_as_text(role), ", mode =", mode
 		if role is banrole:
+			log.debug("removing %s from %s, user is banned" % (
+				user.nick, self.name))
 			self.remove_user(user, "user not allowed")
 		elif role is allowrole:
 			if 'o' in mode:
+				log.debug("user %s is not operator on %s, fixing" % (
+					user.nick, self.name))
 				self.deop_user(user)
 		elif role is operrole:
 			if not 'o' in mode:
+				log.debug("user %s is operator on %s, fixing" % (
+					user.nick, self.name))
 				self.op_user(user)
 
 	def find_role(self, user, defaultrole=None):
@@ -328,7 +325,6 @@ class Channel(object):
 
 		profile = user.profile
 		if not profile:
-			print "find_role - no profile -> default"
 			return defaultrole
 
 		# server-operator overides all
@@ -425,6 +421,9 @@ class Channel(object):
 
 	def send(self, msg):
 		self.parent.construct.send(msg)
+
+	def __str__(self):
+		return "Channel(%s)" % self.name
 
 
 class Profile(object):
@@ -524,7 +523,7 @@ class ProfileDB(object):
 		# any profiles lost from database?
 		for prof in old.itervalues():
 			log.info("Rehash: removed profile %s" % prof.register_nick)
-			user = self.server.get_user_for_profile(prof)
+			user = self.get_user_for_profile(prof)
 			if user:
 				log.info("Rehash: user %s unidentified due to lost profile" % user.nick)
 				user.unidentify()
@@ -641,6 +640,12 @@ class User(object):
 	def is_confirmed(self):  # is user at least confirmed
 		profile = self.profile
 		return profile and profile.is_confirmed()
+
+	def level(self):
+		if not self.profile:
+			return guestlevel
+		else:
+			return self.profile.level
 
 
 class Server(UserDB, ChannelDB, ProfileDB):
@@ -915,40 +920,25 @@ class Handler(object):
 			raise Exception("Lost connection, while connecting")
 
 # decorator
-def needs_profile(func):
-	@wraps(func)
-	def find_profile(self, user, *args):
-		profile = user.profile
-		if not profile:
-			raise IrcMsgException(
-					user,
-					"No profiles registered for %s, " % user.nick +
-					"not identified")
-		func(self, user, profile, *args)
-	return find_profile
+#def needs_profile(func):
+#	@wraps(func)
+#	def find_profile(self, user, *args):
+#		profile = user.profile
+#		if not profile:
+#			raise IrcMsgException(
+#					user,
+#					"No profiles registered for %s, " % user.nick +
+#					"not identified")
+#		func(self, user, profile, *args)
+#	return find_profile
 
-def needs_channel(func):
+def fix_caller_afterwards(func):
 	@wraps(func)
-	def find_channel(self, user, cmd, args):
-		chan, rest = self.extract_channel_from_args(user, args)
-		func(self, user, chan, cmd, rest)
-	return find_channel
-
-def fix_user_on_channels_afterwards(func):
-	@wraps(func)
-	def fix_user_afterwards_wrapper(self, user, *args):
-		func(self, user, *args)
+	def fix_user_afterwards_wrapper(self, user, *args1, **args2):
+		func(self, user, *args1, **args2)
 		self.server.fix_user_on_all_channels(user)
 	return fix_user_afterwards_wrapper
 
-def no_leftover_arguments(func):
-	@wraps(func)
-	def no_leftover_arguments_wrap(self, user, *args):
-		if args[-1].strip():
-			raise IrcMsgException(user, "Invalid extra arguments: %s" % args[-1])
-		args = args[:-1]
-		func(self, user, *args)
-	return no_leftover_arguments_wrap
 
 class Construct(object):
 	def __init__(self, server, nick, description):
@@ -958,35 +948,77 @@ class Construct(object):
 
 		server.set_construct(self)
 
-		# all chanoper command have a first argument specifying a
-		# channel. user must be chanop on that channel
-		self.chanoper = object()
-
 		# find commands and documentation
-		self.commands = []  # [(command, minauth, func, help)]
+		self.commands = CommandContainer()
 		for funcname, func in self.__class__.__dict__.iteritems():
 			if funcname.startswith("cmd_"):
-				cmdname = funcname[4:]
-				docstr = func.__doc__
-				if not docstr:
-					log.warn("Ignoring command '%s', no docstring" % cmdname)
-					continue
-				r = re.match(" (guest|registered|confirmed|oper|chanoper) (.*\S) ".replace(' ', '\s*'), docstr, re.DOTALL)
-				if not r:
-					log.warn("Ignoring command '%s', could not find authorisation in docstring" % cmdname)
-					continue
-				minauthstr, docu = r.groups()
-				minauth = {
-						"guest": guestlevel,
-						"registered": registeredlevel,
-						"confirmed": confirmedlevel,
-						"oper": operlevel,
-						"chanoper": self.chanoper}[minauthstr]
-				log.info("Registered command %s for authorisation %s" % (cmdname, minauthstr))
-				self.commands.append((cmdname, minauth, func, docu))
-		self.commands.sort()
+				funcname = funcname[4:].replace('_', ' ')
+				try:
+					self.commands.register_command(funcname, func)
+				except Exception, e:
+					log.warn("Ignoring command '%s', %s" % (funcname, e))
+		self.commands.register_chapter(1, "general commands")
+		self.commands.register_chapter(2, "channel commands")
+		self.commands.register_chapter(3, "server operator commands")
+		self.commands.register_access_test(self.test_access)
 
 		server.rehash()  # read initial state from database
+
+	def test_access(self, cmd, args, user, forhelp):
+		""" test if user has access to command.
+		side-effect: if a channel was specified in args, replace it with the
+		channel object """
+		if args and 'chan' in args:
+			chan = self.server.get_channel(args['chan'])
+			if not chan:
+				raise Exception("unknown channel '%s'" % args['chan'])
+			args['chan'] = chan
+
+		if cmd.minauth is guestlevel:
+			return # everyone is at least guest
+
+		userlevel = user.level()
+		if userlevel is guestlevel:
+			raise Exception("guests access not allowed, please identify/register")
+		assert (
+				userlevel is registeredlevel or
+				userlevel is confirmedlevel or
+				userlevel is operlevel)
+
+		if cmd.minauth is self.commands.chanoper:
+			if not forhelp:
+				assert not args is None
+				# chanoper is special. it is allowed if the first argument is
+				# the correct channel (or user is serveroper)
+				# even for serveroper's the channel must be known
+				chan = args.get('chan')
+				if not chan:
+					raise Exception("no channel found in arguments")
+				if not chan.find_role(user) is operrole:
+					raise Exception("'%s' is not channel operator on '%s'" % (
+						user.nick, chan.name))
+			else:
+				assert args is None
+				# when serving help pages, we list the channel commands if the user is
+				# channel operator on any channel
+				if not userlevel is operlevel and \
+						not any(chan.find_role(user) is operrole
+								for chan in self.server.get_channels_with_user(user)):
+					raise Exception("user is not channel operator on any channel")
+			return  # ok
+
+		if userlevel is operlevel:
+			return  # serverops get all
+
+		if cmd.minauth is confirmedlevel and \
+				userlevel is registeredlevel:
+			raise Exception("profile not confirmed")
+
+		if cmd.minauth is operlevel and \
+				not userlevel is operlevel:
+			raise Exception("not server operator")
+
+		# it's OK
 
 	def introduce(self):
 		handler = self.server.handler
@@ -1026,166 +1058,6 @@ class Construct(object):
 			return user.profile
 		raise IrcMsgException(asker, "No profile found for '%s'" % nick)
 
-
-	@fix_user_on_channels_afterwards
-	def cmd_identify(self, user, cmd, args):
-		""" guest
-		identify [<nick>] <password>
-		Tell the server who you are, binding an earlier
-		registered profile to your current session """
-		args = [arg.strip() for arg in args.split()]
-		if len(args) == 2:
-			nick, pwd = args
-		elif len(args) == 1:
-			nick, pwd = user.nick, args[0]
-		else:
-			raise IrcMsgException(user, "Invalid arguments, need (optionally) a username and a password")
-
-		profile = self.server.find_profile_by_nickname(nick)
-		if not profile:
-			raise IrcMsgException(user, "No profile for %s, please register first" % nick)
-		profile.test_password(pwd, user)
-
-		self.notice(user, "Successfully identified as %s" %
-				profile.realname or profile.register_nick)
-
-		# someone else already using this profile??
-		user_ = self.server.get_user_for_profile(profile)
-		if user_ and not user_ is user:
-			self.server.kill_user(user_, "Ghosted by %s" % user.nick)
-
-		user.identify(profile)
-		if profile.level is operlevel:
-			self.server.notice_serverops(
-					"%s just became server operator" % user.nick)
-
-	@fix_user_on_channels_afterwards
-	@no_leftover_arguments
-	def cmd_unidentify(self, user, cmd):
-		""" registered
-		unidentify
-		Stop associating your current profile with this
-		session. Probably only usefull in debugging """
-		user.unidentify()
-
-	def cmd_reidentify(self, user, cmd, args):
-		""" registered
-		reidentify [<nick>] <password>
-		identify as a different user, short for unidentify/identify """
-		user.unidentify()
-		self.cmd_identify(user, cmd, args)
-
-	@fix_user_on_channels_afterwards
-	def cmd_register_user(self, user, cmd, args):
-		""" guest
-		register_user <password>
-		Create a new profile for the current user """
-		profile = self.server.find_profile_by_nickname(user.nick)
-		if profile:
-			raise IrcMsgException(user, "User %s already registered" % user.nick)
-
-		password = args.strip()
-		if not password:
-			raise IrcMsgException(user, "Please specify password")
-		if password.find(' ') >= 0:
-			raise IrcMsgException(user, "No spaces allowed in password")
-		newprofile = self.server.create_profile(user.nick, password)
-		self.notice(user, "Successfully registered %s, please remember your password to identify next time" % user.nick)
-		user.identify(newprofile)
-		# FIXME: tell user he can now register channels, etc
-
-	@needs_profile
-	def cmd_unregister_user(self, caller, callerprofile, cmd, args):
-		""" registered
-		unregister_user [<nick>] [<password>]
-		Destroy registered profile. Does an implicit unidentify.
-		Only server operator can unregister others. """
-
-		args = args.split()
-		if callerprofile.level is operlevel:
-			if len(args) != 1:
-				raise IrcMsgException(caller, "Server operators should only specify a nickname")
-			profile = self.find_a_profile_for_nick(caller, args[0])
-			if profile is callerprofile:
-				raise IrcMsgException(caller, "Server operators cannot unregister their own profile")
-		else:
-			if len(args) == 2:
-				pwd = args[1]
-				profile = self.find_a_profile_for_nick(caller, args[0])
-				if not profile is callerprofile:
-					raise IrcMsgException(caller, "You can only unregister your own profile")
-			else:
-				pwd = args[0]
-				profile = callerprofile
-			if not profile.test_password(pwd):
-				raise IrcMsgException("Password invalid")
-
-		# FIXME: make sure we don't throw away the last server oper
-		user = self.server.get_user_for_profile(profile)
-		if user:
-			user.unidentify()
-		self.server.drop_profile(profile)
-		if user:
-			self.server.fix_user_on_all_channels(user)
-		
-	def cmd_reset_pass(self, oper, cmd, args):
-		""" oper
-		reset_pass <nick> <newpass>
-		Change password for a profile """
-		try:
-			nick, newpass = args.strip().split(' ')
-		except ValueError:
-			raise IrcMsgException("Invalid arguments, need nickname and new password")
-
-		profile = self.find_profile_by_nickname(nick)
-		if not profile:
-			raise IrcMsgException("No profile found for '%s'" % nick)
-		profile.reset_password(newpass)
-
-	@needs_profile
-	def cmd_passwd(self, user, profile, cmd, args):
-		""" registered
-		passwd <oldpass> <newpass>
-		Change password for current profile """
-		try:
-			oldpass, newpass = args.split(' ')
-		except ValueError:
-			raise IrcMsgException("Need old password and new password")
-		profile.test_password(oldpass, user, "Error, old password invalid")
-		profile.reset_password(newpass)
-
-	def cmd_confirm(self, oper, cmd, args):
-		""" oper
-		confirm <nick> <realname> <email>
-		Confirm a registered user really is who he says he is """
-		# FIXME: allow last argument to specify serveroper
-		r = re.match('(\S+)\s+(.*)\s+(\S+@\S+)', args.strip())
-		if not r:
-			raise IrcMsgException(oper, "need: <nick> <realname> <email>")
-		nick, realname, email = r.groups()
-		if realname[:1] == realname [-1:] and realname[:1] in "\"'":
-			realname = realname[1:-1]
-
-		profile = self.find_a_profile_for_nick(oper, nick)
-		profile.confirm(realname, email)
-		user = self.server.get_user(nick)
-		if user:
-			self.server.fix_user_on_all_channels(user)
-
-	def cmd_unconfirm(self, oper, cmd, args):
-		""" oper
-		unconfirm <nick>
-		For undoing 'confirm' """
-		# FIXME: check if we are not downgrading last serveroper
-		nick = args.strip()
-		profile = self.find_a_profile_for_nick(oper, nick)
-
-		profile.unconfirm()
-
-		user = self.server.get_user(nick)
-		if user:
-			self.server.fix_user_on_all_channels(user)
-
 	def online_or_offline(self, profile):
 		user = self.server.get_user_for_profile(profile)
 		if user:
@@ -1214,69 +1086,245 @@ class Construct(object):
 			roles = "no defined roles on channels"
 		return roles
 
-	def cmd_whois(self, user, cmd, args):
+	@fix_caller_afterwards
+	def cmd_identify(self, caller, cmd, nick, password):
+		""" guest
+		1.1 identify [<nick>] <password>
+		Tell the server who you are, binding an earlier
+		registered profile to your current session """
+
+		if caller.profile:
+			raise IrcMsgException(caller, "already identified as %s" %
+					caller.profile.register_nick)
+
+		nick = nick or caller.nick
+		profile = self.server.find_profile_by_nickname(nick)
+		if not profile:
+			raise IrcMsgException(caller, "No profile for %s, please register first" % nick)
+		profile.test_password(password, caller)
+
+		self.notice(caller, "Successfully identified as %s" %
+				profile.realname or profile.register_nick)
+
+		# someone else already using this profile??
+		user_ = self.server.get_user_for_profile(profile)
+		if user_ and not user_ is caller:
+			self.server.kill_user(user_, "Ghosted by %s" % caller.nick)
+
+		caller.identify(profile)
+		if profile.level is operlevel:
+			self.server.notice_serverops(
+					"%s just became server operator" % caller.nick)
+		assert caller.level() != guestlevel
+
+	def cmd_reidentify(self, caller, cmd, nick, password):
 		""" registered
-		whois [<nick>]
+		1.2 reidentify [<nick>] <password>
+		identify as a different user, short for unidentify/identify """
+		caller.unidentify()
+		self.cmd_identify(caller, cmd, nick, password)
+
+	@fix_caller_afterwards
+	def cmd_unidentify(self, caller, cmd):
+		""" registered
+		1.3 unidentify
+		Stop associating your current profile with this
+		session. Probably only usefull in debugging """
+		caller.unidentify()
+
+	@fix_caller_afterwards
+	def cmd_register(self, caller, cmd, password):
+		""" guest
+		1.4 register <password>
+		Create a new profile for the current user """
+		profile = self.server.find_profile_by_nickname(caller.nick)
+		if profile:
+			raise IrcMsgException(caller, "User %s already registered" % caller.nick)
+
+		if not password:
+			raise IrcMsgException(caller, "Please specify password")
+		if password.find(' ') >= 0:
+			raise IrcMsgException(caller, "No spaces allowed in password")
+		newprofile = self.server.create_profile(caller.nick, password)
+		self.notice(caller, ("Successfully registered %s, please remember your " +
+				"password to identify next time") % caller.nick)
+		caller.identify(newprofile)
+		# FIXME: tell caller he can now register channels, etc
+
+	def cmd_unregister(self, caller, cmd, nick, password):
+		""" registered
+		1.5 unregister [<nick>] [<password>]
+		Destroy registered profile. Does an implicit unidentify.
+		Only server operator can unregister others. """
+
+		if caller.level() is operlevel:
+			if password and not nick:  # parser might have gotten it wrong
+				nick, password = password, nick
+			if password:
+				raise IrcMsgException(caller, "Server operators should only specify a nickname")
+			if not nick:
+				raise IrcMsgException(caller, "Server operators must specify a nickname")
+			profile = self.find_a_profile_for_nick(caller, nick)
+			if profile is caller.profile:
+				raise IrcMsgException(caller, "Server operators cannot unregister their own profile")
+		else:
+			if nick and password:
+				profile = self.find_a_profile_for_nick(caller, nick)
+				if not profile is caller.profile:
+					raise IrcMsgException(caller, "You can only unregister your own profile")
+			else:
+				if nick and not password:  # parser might have gotten it wrong
+					nick, password = password, nick
+				profile = caller.profile
+			profile.test_password(password)
+
+		user = self.server.get_user_for_profile(profile)
+		if user:
+			user.unidentify()
+		self.server.drop_profile(profile)
+		if user:
+			self.server.fix_user_on_all_channels(user)
+
+	def cmd_passwd(self, caller, profile, cmd, oldpass, newpass):
+		""" registered
+		1.6 passwd <oldpass> <newpass>
+		Change password for current profile """
+		profile.test_password(oldpass, caller, "error, old password invalid")
+		profile.reset_password(newpass)
+
+	def cmd_whoami(self, caller, cmd):
+		""" guest
+		1.7 whoami
+		Show who you are """
+		if caller.level() is guestlevel:
+			self.notice(caller, "You are %s, an unregistered guest" % caller.nick)
+		else:
+			self.cmd_whois(caller, cmd, None)
+
+	def cmd_whois(self, caller, cmd, nick):
+		""" registered
+		1.8 whois [<nick>]
 		Show the profile currently associated with your session. """
-		nick = args.strip()
-		if nick and user.is_confirmed():
-			profile = self.find_a_profile_for_nick(user, nick)
+		if nick and caller.is_confirmed():
+			profile = self.find_a_profile_for_nick(caller, nick)
 
 			status = self.online_or_offline(profile)
 			firstline = "%s is %s and " % (nick, status)
-			leveltxt = level_as_text(profile.level)
+			leveltxt = str(profile.level)
 			firstline += leveltxt + " as " + profile.register_nick
 		else:
-			if args and nick.lower() != user.nick.lower():
-				raise IrcMsgException(user, "You must have a confirmed account to view others")
-			profile = user.profile
-			leveltxt = level_as_text(profile.level)
-			firstline = "You are %s, %s" % (user.nick, leveltxt)
-			if user.nick != profile.register_nick:
+			if nick and nick.lower() != caller.nick.lower():
+				raise IrcMsgException(caller, "You must have a confirmed account to view others")
+			profile = caller.profile
+			leveltxt = str(profile.level)
+			firstline = "You are %s, %s" % (caller.nick, leveltxt)
+			if caller.nick != profile.register_nick:
 				firstline += " as " + profile.register_nick
 		firstline += ", " + self.rolesline(profile)
-		self.notice(user, firstline)
+		self.notice(caller, firstline)
 		if profile.is_confirmed():
-			self.notice(user, "Real name: " + (profile.realname or ''))
-			self.notice(user, "Email: " + (profile.email or ''))
+			self.notice(caller, "Real name: " + (profile.realname or ''))
+			self.notice(caller, "Email: " + (profile.email or ''))
 
-	@no_leftover_arguments
-	def cmd_whoami(self, user, cmd):
+	def cmd_help(self, caller, cmd, command, verbose):
 		""" guest
-		whoami
-		Show who you are """
-		if user.profile:
-			self.cmd_whois(user, cmd, "")
-		else:
-			self.notice(user, "You are %s, an unregistered guest" % user.nick)
+		1.9 help [verbose=verbose] [<command*>] 
+		Show all commands or show description for specified command.
+		"""
+		try:
+			if command:
+				cmd, args = self.commands.parse_cmdline(command, caller, forhelp=True)
+				self.notice(caller, cmd.shorthelp)
+				for line in cmd.longhelp.split('\n'):
+					self.notice(caller, line.strip())
+			else:
+				for line in self.commands.get_helplist(caller, bool(verbose)):
+					self.notice(caller, line.strip())
+		except Exception, e:
+			import traceback
+			traceback.print_exc()
+			raise IrcMsgException(caller, str(e))
 
-	@needs_channel
-	@no_leftover_arguments
-	def cmd_register_channel(self, user, chan, cmd):
+	def cmd_channel_register(self, caller, cmd, chan):
 		""" registered
-		register_channel <chan>
+		2.1 channel register <chan>
 		Register an unregistered channel and make you it's channel operator """
 		if chan.registered:
-			raise IrcMsgException(user, "Channel '%s' is already registered" % chan.name)
+			raise IrcMsgException(caller, "Channel '%s' is already registered" % chan.name)
 		chan.register()
-		chan.set_role(user, user.profile, operrole)
+		chan.set_role(caller, caller.profile, operrole)
 		chan.fix_all_users()
 
-	@needs_channel
-	@no_leftover_arguments
-	def cmd_unregister_channel(self, user, chan, cmd):
+	def cmd_channel_unregister(self, caller, cmd, chan):
 		""" chanoper
-		unregister_channel <chan>
+		2.2 channel unregister <chan>
 		Undo register_channel """
 		if not chan.registered:
-			raise IrcMsgException(user, "Channel '%s' is not registered" % chan.name)
+			raise IrcMsgException(caller, "Channel '%s' is not registered" % chan.name)
 		chan.unregister()
 
-	@needs_channel
-	@no_leftover_arguments
-	def cmd_roles(self, oper, chan, cmd):
+	def cmd_channel_allow(self, oper, cmd, chan, nick):
 		""" chanoper
-		roles <chan>
+		2.3 channel allow <chan> <nick>
+		Allow <nick> on <chan> (only useful if channel policy is set to deny) """
+		profile = self.find_a_profile_for_nick(oper, nick)
+		chan.set_role(oper, profile, allowrole)
+		user = self.server.get_user_for_profile(profile)
+		if user:
+			chan.fix_user_to_role(user)
+
+	def cmd_channel_ban(self, oper, cmd, chan, nick):
+		""" chanoper
+		2.4 channel ban <chan> <nick>
+		Deny <nick> access to <chan> (only useful if channel policy is set to allow) """
+		profile = self.find_a_profile_for_nick(oper, nick)
+		chan.set_role(oper, profile, banrole)
+		user = self.server.get_user_for_profile(profile)
+		if user:
+			chan.fix_user_to_role(user)
+
+	def cmd_channel_oper(self, oper, cmd, chan, nick):
+		""" chanoper
+		2.5 channel oper <chan> <nick>
+		Make <nick> a channel opperator on <chan> """
+		profile = self.find_a_profile_for_nick(oper, nick)
+		chan.set_role(oper, profile, operrole)
+		user = self.server.get_user_for_profile(profile)
+		if user:
+			chan.fix_user_to_role(user)
+
+	def cmd_channel_reset(self, oper, cmd, chan, nick):
+		""" chanoper
+		2.6 channel reset <chan> <nick>
+		Remove any roles for <nick> on <chan> """
+		profile = self.find_a_profile_for_nick(oper, nick)
+		chan.set_role(oper, profile, None)
+		user = self.server.get_user_for_profile(profile)
+		if user:
+			chan.fix_user_to_role(user)
+
+	def cmd_channel_policy(self, oper, cmd, chan, policy):
+		""" chanoper
+		2.7 channel policy <chan> policy=allow|deny
+		Can users without explicit role join or is access denied """
+
+		chan.set_policy(oper, policy)
+		chan.fix_all_users()
+
+	def cmd_channel_guests(self, oper, cmd, chan, policy):
+		""" chanoper
+		2.8 channel guests <chan> policy=allow|deny
+		Are unregistered users allowed to join this channel. Guests are allowed on
+		a channel if both the channel policy and this setting are 'allow' """
+		allow = {"allow":True, "deny":False}[policy]
+
+		# FIXME, this command does not work
+		chan.set_allow_guests(oper, allow)
+		chan.fix_all_users()
+
+	def cmd_channel_roles(self, oper, cmd, chan):
+		""" chanoper
+		2.9 channel roles <chan>
 		Show the current known roles for channel """
 		roles = chan.get_roles(oper)
 		if not roles:
@@ -1305,153 +1353,86 @@ class Construct(object):
 		self.notice(oper, "total %d role(s) defined for %s" % (
 			len(roles), chan.name))
 
-	@needs_channel
-	def cmd_add(self, oper, chan, cmd, args):
-		""" chanoper
-		add <chan> <nick> ban|allow|oper
-		Allow <nick> on <chan> (if policy is set to deny)
-		or ban <nick> from <chan> (if policy is set to accept)
-		or make <nick> a channel operator on <chan>"""
-		r = re.match("\s*(\S*)\s+(ban|allow|oper)\s*$", args)
-		if not r:
-			raise IrcMsgException(oper, "Argument error, need nick and 'ban', 'allow' or 'oper'")
-		nick, newrole = r.groups()
-		profile = self.find_a_profile_for_nick(oper, nick)
-		newrole = {'ban': banrole, 'allow': allowrole, 'oper': operrole}[newrole]
-		chan.set_role(oper, profile, newrole)
-		user = self.server.get_user_for_profile(profile)
-		if user:
-			chan.fix_user_to_role(user)
-
-	@needs_channel
-	def cmd_del(self, oper, chan, cmd, args):
-		""" chanoper
-		del <chan> <nick>
-		delete a role for a given user from a channel"""
-		nick = args.strip()
-		profile = self.find_a_profile_for_nick(oper, nick)
-		chan.del_role(oper, profile)
-		user = self.server.get_user_for_profile(profile)
-		if user:
-			chan.fix_user_to_role(user)
-
-	def cmd_mod(self, oper, cmd, args):
-		""" chanoper
-		mod <chan> <nick> ban|allow|oper
-		modify a role for a given user for a channel"""
-		self.cmd_add(oper, cmd, args)
-
-	@needs_channel
-	def cmd_guests(self, oper, chan, cmd, args):
-		""" chanoper
-		guests #chan allow|deny
-		Are unregistered users allowed to join this channel """
-		allowstr = args.strip().lower()
-		if allowstr == "allow":
-			allow = True
-		elif allowstr == "deny":
-			allow = False
-		else:
-			raise IrcMsgException(oper, "please use 'allow' or 'deny'. not '%s'" % allowstr)
-
-		# FIXME, this command does not work
-		chan.set_allow_guests(oper, allow)
-		chan.fix_all_users()
-
-	@needs_channel
-	def cmd_policy(self, oper, chan, cmd, args):
-		""" chanoper
-		policy <chan> allow|deny
-		Are users without explicit role in the channel allowed or kept out """
-		allowstr = args.strip().lower()
-		if allowstr not in ("allow", "deny"):
-			raise IrcMsgException(oper, "please use 'allow' or 'deny'. not '%s'" % allowstr)
-
-		chan.set_policy(oper, allowstr)
-		chan.fix_all_users()
-
-	@no_leftover_arguments
-	def cmd_profiles(self, oper, cmd):
+	def cmd_list_channels(self, oper, cmd):
 		""" oper
-		profiles
-		Show registered profiles """
-		all_profiles = self.server.get_all_profiles()
-		for prof in all_profiles:
-			status = self.online_or_offline(prof)
-			level = level_as_text(prof.level)
-			msg = "%s, %s, %s" % (prof.register_nick, status, level)
-			if prof.is_confirmed():
-				msg += ", %s, %s" % (prof.realname or '', prof.email or '')
-			self.notice(oper, "- %s" % msg)
-		self.notice(oper, "Total %d registered profiles" % len(all_profiles))
-
-	@no_leftover_arguments
-	def cmd_channels(self, user, cmd):
-		""" oper
-		channels
+		3.1 list channels
 		Show known channels """
 		channels = self.server.get_all_channels()
 		if not channels:
-			raise IrcMsgException(user, "No channels found!")
+			raise IrcMsgException(oper, "No channels found!")
 		for chan in channels:
 			if chan.registered:
 				registered = "registered"
 			else:
 				registered = "not registered"
-			self.notice(user, "- %s %d users (%s)" % (
+			self.notice(oper, "- %s %d users (%s)" % (
 				chan.name, chan.usercount(), registered))
 
-	@no_leftover_arguments
-	def cmd_restart(self, user, cmd):
+	def cmd_list_profiles(self, oper, cmd):
 		""" oper
-		restart
-		Restart the construct. Use with care. """
-		raise RestartException()
+		3.2 list profiles
+		Show registered profiles """
+		all_profiles = self.server.get_all_profiles()
+		for prof in all_profiles:
+			status = self.online_or_offline(prof)
+			msg = "%s, %s, %s" % (prof.register_nick, status, prof.level)
+			if prof.is_confirmed():
+				msg += ", %s, %s" % (prof.realname or '', prof.email or '')
+			self.notice(oper, "- %s" % msg)
+		self.notice(oper, "Total %d registered profiles" % len(all_profiles))
 
-	def cmd_kill(self, oper, cmd, args):
+	def cmd_confirm(self, oper, cmd, nick, realname, email):
 		""" oper
-		kill <nick>
+		3.3 confirm <nick> <realname*> <email>
+		Confirm a registered user really is who he says he is """
+		profile = self.find_a_profile_for_nick(oper, nick)
+		profile.confirm(realname, email)
+		user = self.server.get_user(nick)
+		if user:
+			self.server.fix_user_on_all_channels(user)
+
+	def cmd_unconfirm(self, oper, cmd, nick):
+		""" oper
+		3.4 unconfirm <nick>
+		For undoing 'confirm' """
+		# FIXME: check if we are not downgrading last serveroper
+		profile = self.find_a_profile_for_nick(oper, nick)
+
+		profile.unconfirm()
+
+		user = self.server.get_user(nick)
+		if user:
+			self.server.fix_user_on_all_channels(user)
+
+	def cmd_kill(self, oper, cmd, nick):
+		""" oper
+		3.5 kill <nick>
 		Remove someone from the irc server (beware of auto-reconnect) """
-		if args.find(' ') >= 0:
-			raise IrcMsgException("Too many arguments, expected only a nickname")
-		nick = args
 		user = self.server.get_user(nick)
 		if not user:
 			raise IrcMsgException(oper, "No such nick '%s'" % nick)
 		self.server.kill_user(user, "killed by %s" % oper.nick)
 
-	@no_leftover_arguments
-	def cmd_rehash(self, user, cmd):
+	def cmd_reset_pass(self, oper, cmd, nick, newpass):
 		""" oper
-		rehash
+		3.6 reset pass <nick> <newpass>
+		Reset password for a profile """
+		profile = self.find_profile_by_nickname(nick)
+		if not profile:
+			raise IrcMsgException("No profile found for '%s'" % nick)
+		profile.reset_password(newpass)
+
+	def cmd_rehash(self, oper, cmd):
+		""" oper
+		3.7 rehash
 		re-read profiles/channels/roles from database and update state """
 		self.server.rehash()
 
-	def cmd_help(self, user, cmd, args):
-		""" guest
-		help [<command>]
-		Show all commands or show description for specified command.
-		"""
-		neededcmd = args.strip().lower()
-		found = False
-		for cmd, minauth, func, docu in self.commands:
-			if minauth is self.chanoper:
-				minauth = " (for channel operators)"
-			elif minauth is guestlevel:
-				minauth = ''
-			else:
-				minauth = " (must be %s)" % level_as_text(minauth)
-			lines = docu.split('\n')
-			if not neededcmd:
-				self.notice(user, "%s%s" % (lines[0], minauth))
-			elif cmd.lower().startswith(neededcmd):
-				found = True
-				self.notice(user, lines[0] + minauth)
-				for line in lines[1:]:
-					self.notice(user, line.strip())
-		if neededcmd and not found:
-			raise IrcMsgException(user, "Command not found: %s" % neededcmd)
-
+	def cmd_restart(self, oper, cmd):
+		""" oper
+		3.8 restart
+		Restart the construct. Use with care. """
+		raise RestartException()
 
 	def extract_channel_from_args(self, user, args):
 		argssplit = args.strip().split(' ', 1)
@@ -1470,66 +1451,19 @@ class Construct(object):
 			raise IrcMsgException(user, "Unknown channel '%s'" % channame)
 		return (chan, rest)
 
-	def test_authorisation(self, user, minlevel, cmd, args):
-		if minlevel is guestlevel:
-			return  # everyone is at least guest
+	def recv(self, caller, msg):
+		msg = msg.strip()
+		try:
+			cmd, args = self.commands.parse_cmdline(msg, caller, forhelp=False)
+		except Exception, e:
+			log.info("%s failed command %s: %s" % (caller.nick, msg, e))
+			raise IrcMsgException(caller, str(e))
 
-		profile = user.profile
-		if not profile:
-			raise CommandDenied(user, cmd, "not registered, no profile")
-		userlevel = profile.level
-		assert (
-				profile.level is registeredlevel or
-				profile.level is confirmedlevel or
-				profile.level is operlevel)
+		log.debug("%s used command %s(%s)" % (caller.nick, cmd.funcname,
+			', '.join("%s=%s" % tup for tup in args.iteritems())))
 
-		if minlevel is self.chanoper:
-			# chanoper is special. it is allowed if the first argument is
-			# the correct channel (or user is serveroper)
-			# even for serveroper's the channel must be known
-			chan, rest = self.extract_channel_from_args(user, args)
-			result = userlevel is operlevel or chan.is_channel_operator(user)
-			if not result:
-				raise CommandDenied(user, cmd, "not channel operator for %s" % chan.name)
-			return
-
-		if userlevel is operlevel:
-			return  # serverops get all
-
-		if minlevel is confirmedlevel and \
-				userlevel is registeredlevel:
-			raise CommandDenied(user, cmd, "profile not confirmed")
-
-		if minlevel is operlevel and \
-				not userlevel is operlevel:
-			raise CommandDenied(user, cmd, "not server operator")
-
-		# it's OK
-
-	def recv(self, user, msg):
-		msg = msg.strip().split(' ', 1)
-		if len(msg) > 1:
-			cmd, args = msg
-		else:
-			cmd, args = msg[0], ''
-		cmd = cmd.lower()
-
-		if len(cmd) < 2:
-			raise IrcMsgException(user, "Unknown command (and very short..)")
-
-		funcs = [tup for tup in self.commands if tup[0].startswith(cmd)]
-		if len(funcs) == 0:
-			raise IrcMsgException(user, "Unknown command '%s'" % cmd)
-		elif len(funcs) > 1:
-			raise IrcMsgException(user, "Non-unique command, choose: " + make_list(
-				(tup[0] for tup in funcs), "or"))
-
-		cmd_, minlevel, func, docu = funcs[0]
-		self.test_authorisation(user, minlevel, cmd_, args)
-
-		func(self, user, cmd, args.strip())
-
-		self.notice(user, "OK")
+		cmd.func(self, caller, cmd, **args)
+		self.notice(caller, "OK")
 
 
 def main(configfile):
@@ -1565,15 +1499,15 @@ if __name__ == "__main__":
 	FORMAT = '#%(message)s'
 	logging.basicConfig(level=logging.INFO, format=FORMAT)
 
-	parser = argparse.ArgumentParser(description='(More) secure irc user management')
-	parser.add_argument('--config', '-c', type=str, help='config file', required=True)
-	args = parser.parse_args()
+	parser__ = argparse.ArgumentParser(description='(More) secure irc user management')
+	parser__.add_argument('--config', '-c', type=str, help='config file', required=True)
+	args__ = parser__.parse_args()
 
 	starting = True
 	while starting:
 		starting = False
 		try:
-			main(args.config)
+			main(args__.config)
 		except RestartException:
 			starting = True
 
