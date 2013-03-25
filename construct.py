@@ -1002,7 +1002,7 @@ class Construct(object):
 				if not userlevel is operlevel and \
 						not any(chan.find_role(user) is operrole
 								for chan in self.server.get_channels_with_user(user)):
-					raise Exception("user is not channel operator on any channel")
+					raise IrcMsgException(user, "user is not channel operator on any channel")
 			return  # ok
 
 		if userlevel is operlevel:
@@ -1010,11 +1010,11 @@ class Construct(object):
 
 		if cmd.minauth is confirmedlevel and \
 				userlevel is registeredlevel:
-			raise Exception("profile not confirmed")
+			raise IrcMsgException(user, "profile not confirmed")
 
 		if cmd.minauth is operlevel and \
 				not userlevel is operlevel:
-			raise Exception("not server operator")
+			raise IrcMsgException(user, "not server operator")
 
 		# it's OK
 
@@ -1139,6 +1139,9 @@ class Construct(object):
 		""" guest
 		1.4 register <password>
 		Create a new profile for the current user """
+		if self.server.get_channel(password):
+			raise IrcMsgException(caller, "Trying to register a channel? try the 'register channel' command")
+
 		profile = self.server.find_profile_by_nickname(caller.nick)
 		if profile:
 			raise IrcMsgException(caller, "User %s already registered" % caller.nick)
@@ -1236,12 +1239,14 @@ class Construct(object):
 		try:
 			if command:
 				cmd, args = self.commands.parse_cmdline(command, caller, forhelp=True)
-				self.notice(caller, cmd.shorthelp)
+				self.notice(caller, cmd.shorthelp + ' ' + str(cmd.args))
 				for line in cmd.longhelp.split('\n'):
 					self.notice(caller, line.strip())
 			else:
 				for line in self.commands.get_helplist(caller, bool(verbose)):
 					self.notice(caller, line.strip())
+		except ParseException, e:
+			raise IrcMsgException(caller, str(e))
 		except Exception, e:
 			import traceback
 			traceback.print_exc()
@@ -1332,20 +1337,18 @@ class Construct(object):
 		if not roles:
 			raise IrcMsgException(oper, "No roles defined for %s" % chan.name)
 
-		if chan.allow_guests:
-			guesttxt = "allows"
-		else:
-			guesttxt = "denies"
-			self.notice(oper, "%s denies guests" % chan.name)
-			self.notice(oper, "%s allows guests" % chan.name)
-
-		if chan.default_policy_allow:
-			poltxt = "allows"
-		else:
-			poltxt = "denies"
-
-		self.notice(oper, "%s %s guests and channel policy %s registered users" % (
-			chan.name, guesttxt, poltxt))
+		if chan.allow_guests and chan.default_policy_allow:
+			self.notice(
+					oper, "%s policy is set to allow and guests are also allowed" %
+					chan.name)
+		elif not chan.allow_guests and chan.default_policy_allow:
+			self.notice(
+					oper, "%s policy is set to allow but guests are denied" %
+					chan.name)
+		elif not chan.default_policy_allow:
+			self.notice(
+					oper, "%s policy is set to deny" %
+					chan.name)
 
 		for profile, role in roles:
 			status = self.online_or_offline(profile)
@@ -1409,7 +1412,7 @@ class Construct(object):
 	def cmd_kill(self, oper, cmd, nick):
 		""" oper
 		3.5 kill <nick>
-		Remove someone from the irc server (beware of auto-reconnect) """
+		Disconnect someone from the irc server (beware of auto-reconnect) """
 		user = self.server.get_user(nick)
 		if not user:
 			raise IrcMsgException(oper, "No such nick '%s'" % nick)

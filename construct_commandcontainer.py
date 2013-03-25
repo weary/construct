@@ -49,6 +49,8 @@ class ArgumentSingle(object):
 		self.keyw = keyw
 
 	def __str__(self):
+		if self.keyw == 'chan':
+			return "#<chan>"
 		return '<%s>' % self.keyw
 
 	def parse(self, remainder, argumentlist):
@@ -80,13 +82,7 @@ class ArgumentOptional(object):
 			out[self.sub.keyw] = None
 		return out
 			
-class ArgumentMultiple(object):
-	def __init__(self, keyw):
-		self.keyw = keyw
-
-	def __str__(self):
-		return '<%s>' % self.keyw
-
+class ArgumentMultiple(ArgumentSingle):
 	def parse(self, remainder, argumentlist):
 		for l in xrange(len(remainder), -1, -1):
 			try:
@@ -176,8 +172,6 @@ class CommandContainer(object):
 		chaptermaj, chaptermin, args = r.groups()
 		chapter = (int(chaptermaj), int(chaptermin))
 		shorthelp = funcname
-		if args:
-			shorthelp += ' ' + args
 		longhelp = longhelp.strip()
 		log.info("Registered command '%s' for authorisation %s" % (
 			funcname, minauth))
@@ -190,19 +184,11 @@ class CommandContainer(object):
 		tup2 = tuple(i for i in cmdline.split() if i)
 		for cmd in self.commands:
 			tup1 = cmd.funcname.split()
-			if len(tup2) < len(tup1):
-				continue
-
 			if not all(ref.startswith(act.lower())
 					for ref, act in zip(tup1, tup2)):
 				continue
 
 			yield (cmd, tup2[len(tup1):])
-
-	# met arguments en channel-check
-	# full help verbose
-	# full help !verbose
-	# single help, mag altijd
 
 	def parse_cmdline(self, cmdline, user, forhelp):
 		possible = list(self._get_matching_commands(cmdline))

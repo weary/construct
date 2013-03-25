@@ -137,11 +137,11 @@ if __name__ == "__main__":
 	serveroper = TestUser("sErveroper", "serverope1", "ServerOper")
 
 	serveroper.cmd("id serveroperpass")
-	serveroper.cmd("unregister user chanoper", True)
+	serveroper.cmd("unregister chanoper", True)
 	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
-	serveroper.cmd("unregister user allowed", True)
+	serveroper.cmd("unregister allowed", True)
 	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
-	serveroper.cmd("unregister user banned", True)
+	serveroper.cmd("unregister banned", True)
 	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
 	serveroper.cmd("channel unregister #testchan", True)
 	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
@@ -155,10 +155,10 @@ if __name__ == "__main__":
 	serveroper.join("#soonempty")
 	serveroper.part("#soonempty")
 
-	allowed.cmd("register user allowedpass")
-	banned.cmd("register user bannedpass")
+	allowed.cmd("register allowedpass")
+	banned.cmd("register bannedpass")
 
-	chanoper.cmd("register user chanoperpass")
+	chanoper.cmd("register chanoperpass")
 	serveroper.cmd("confirm %s Channel -Confirmed- Operator chanoper@someemail" % chanoper.nick)
 	chanoper.cmd("whoami")
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :You are cHanoper, confirmed, no defined roles")
@@ -238,7 +238,7 @@ if __name__ == "__main__":
 	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :- #testchan 1 users (registered)")
 	serveroper.cmd("channel roles #testchan")
 	chanoper.cmd("channel roles #testchan", True)
-	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :'cHanoper' is not channel operator on '#testchan'")
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :'cHanoper' is not a channel operator on '#testchan'")
 
 	allowed.cmd("channel roles #testchan")
 	assert allowed.names('#testchan') == set(['@aLlowed'])
