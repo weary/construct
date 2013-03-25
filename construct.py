@@ -34,7 +34,7 @@ sjoinre = re.compile(':\S+ SJOIN \d+ (#\S+) \+[a-z]* :(.*)'.replace(' ', '\s+'))
 partre = re.compile(':(\S+) PART (\S+)'.replace(' ', '\s+'))
 kickre = re.compile(':\S+ KICK (\S+) (\S+) :(.*)'.replace(' ', '\s+'))
 #modere = re.compile(":\S+ MODE .*".replace(' ', '\s+'))
-modere = re.compile(':\S+ MODE (\S+) ([-+]\S+) (\S+)'.replace(' ', '\s+'))
+modere = re.compile(':(\S+) MODE (\S+) ([-+]\S+) (\S+(?: \S+)*)'.replace(' ', '\s+'))
 quitre = re.compile(":(\S+) QUIT :(.*)".replace(' ', '\s+'))
 privmsgre = re.compile(":(\S+) PRIVMSG (\S+) :(.*)".replace(' ', '\s+'))
 
@@ -381,7 +381,7 @@ class Channel(object):
 		if not self.users:
 			self.parent.channel_empty(self)
 
-	def mode(self, user, modechange):
+	def mode(self, whodidit, user, modechange):
 		oldmode = self.users[user]
 		if modechange[0] == '-':
 			newmode = ''.join(set(oldmode) - set(modechange[1:]))
@@ -392,19 +392,32 @@ class Channel(object):
 				modechange, user.nick, self.name))
 		self.users[user] = newmode
 
-		self.fix_user_to_role(user)
+		try:
+			if whodidit and 'o' in modechange:
+				if self.is_channel_operator(whodidit) and user.profile:
+					if modechange[0] == '+':
+						self.set_role(whodidit, user.profile, operrole)
+					elif modechange[0] == '-' and self.is_channel_operator(user):
+						if self.default_policy_allow:
+							self.set_role(whodidit, user.profile, None)
+						else:
+							self.set_role(whodidit, user.profile, allowrole)
+		except IrcMsgException, e:
+			pass
 
 	def op_user(self, user):
 		assert self.registered
 		log.debug("%s opped %s" % (self.name, user.nick))
 		self.send("MODE %s +o %s" % (self.name, user.nick))
-		self.mode(user, "+o")
+		self.mode(None, user, "+o")
+		self.fix_user_to_role(user)
 
 	def deop_user(self, user):
 		assert self.registered
 		log.debug("%s de-opped %s" % (self.name, user.nick))
 		self.send("MODE %s -o %s" % (self.name, user.nick))
-		self.mode(user, "-o")
+		self.mode(None, user, "-o")
+		self.fix_user_to_role(user)
 
 	def remove_user(self, user, reason):
 		assert self.registered
@@ -853,17 +866,21 @@ class Handler(object):
 					"parting user %s does not exist" % nick)
 		chan.kick(user)
 
-	def msg_mode(self, channame, modechange, nick):
+	def msg_mode(self, chanoper, channame, modechange, nicks):
 		chan = self.server.get_channel(channame)
 		if not chan:
 			raise OperMsgException(
-					"no such channel '%s' where user %s is mode-changed" % (
-						channame, nick))
-		user = self.server.get_user(nick)
-		if not user:
-			raise OperMsgException(
-					"mode-change for non-existing user %s" % nick)
-		chan.mode(user, modechange)
+					"no such channel '%s' where user(s) %s are mode-changed" % (
+						channame, nicks))
+		chanoper = self.server.get_user(chanoper)
+		for nick in nicks.split():
+			user = self.server.get_user(nick)
+			if not user:
+				raise OperMsgException(
+						"mode-change for non-existing user %s" %
+						nick)
+			chan.mode(chanoper, user, modechange)
+		chan.fix_all_users()
 
 	def msg_quit(self, who, reason):
 		user = self.server.get_user(who)
@@ -1422,7 +1439,7 @@ class Construct(object):
 		""" oper
 		3.6 reset pass <nick> <newpass>
 		Reset password for a profile """
-		profile = self.find_profile_by_nickname(nick)
+		profile = self.server.find_profile_by_nickname(nick)
 		if not profile:
 			raise IrcMsgException("No profile found for '%s'" % nick)
 		profile.reset_password(newpass)
