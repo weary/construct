@@ -323,7 +323,10 @@ class Channel(object):
 
 		profile = user.profile
 		if not profile:
-			return defaultrole
+			if self.allow_guests:
+				return defaultrole
+			else:
+				return banrole
 
 		# server-operator overides all
 		if profile.level is operlevel:
