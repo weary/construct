@@ -28,7 +28,7 @@ passre = re.compile("PASS (\S+) TS.*".replace(' ', '\s+'))
 serverre = re.compile("SERVER (\S+) 1 :(.*)".replace(' ', '\s+'))
 killre = re.compile(":\S+ KILL (\S+) :(.*)".replace(' ', '\s+'))
 
-nickre = re.compile("NICK (\S+) \d+ \d+ \+[a-z]* \S* \S* \S* :.*".replace(' ', '\s+'))
+nickre = re.compile("NICK (\S+) \d+ \d+ \+[a-z]* (\S*) (\S*) \S* :.*".replace(' ', '\s+'))
 nickchangere = re.compile(":(\S+) NICK (\S+) :\d+".replace(' ', '\s+'))
 sjoinre = re.compile(':\S+ SJOIN \d+ (#\S+) \+[a-z]* :(.*)'.replace(' ', '\s+'))
 partre = re.compile(':(\S+) PART (\S+)'.replace(' ', '\s+'))
@@ -585,9 +585,9 @@ class UserDB(object):
 				return user
 		return defaultval
 
-	def create_user(self, newnick):
+	def create_user(self, newnick, username, hostname):
 		assert self.get_user(newnick) is None
-		user = User(newnick)
+		user = User(newnick, username, hostname)
 		self.users.append(user)
 		#print "created user '%s', current users: %s" % (
 		#		user.nick, ', '.join(u.nick for u in self.users))
@@ -634,9 +634,11 @@ class UserDB(object):
 
 
 class User(object):
-	def __init__(self, nick):
+	def __init__(self, nick, username, hostname):
 		self.nick = nick
 		self.profile = None
+		self.username = username
+		self.hostname = hostname
 
 	def nickchange(self, newnick):
 		log.debug("%s nickchanged to %s" % (self.nick, newnick))
@@ -812,12 +814,13 @@ class Handler(object):
 		if who == self.server.construct.nick:
 			raise Exception("Server killed our construct: %s" % reason)
 
-	def msg_nick(self, newnick):
+	def msg_nick(self, newnick, username, hostname):
 		user = self.server.get_user(newnick)
 		if user:
 			raise OperMsgException(
 					"User %s already known" % newnick)
-		self.server.create_user(newnick)
+		user = self.server.create_user(newnick, username, hostname)
+		self.server.fix_user_on_all_channels(user)
 
 	def msg_nickchange(self, oldnick, newnick):
 		user = self.server.get_user(oldnick)
@@ -825,6 +828,7 @@ class Handler(object):
 			raise OperMsgException(
 					"no such user %s" % oldnick)
 		user.nickchange(newnick)
+		self.server.fix_user_on_all_channels(user)
 
 	def msg_sjoin(self, channame, nicks):
 		chan = self.server.get_or_create_channel(channame)
