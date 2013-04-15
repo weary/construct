@@ -407,7 +407,7 @@ class Channel(object):
 							self.set_role(whodidit, user.profile, None)
 						else:
 							self.set_role(whodidit, user.profile, allowrole)
-		except IrcMsgException, e:
+		except IrcMsgException:
 			pass
 
 	def op_user(self, user):
@@ -1018,15 +1018,18 @@ class Construct(object):
 				chan = args.get('chan')
 				if not chan:
 					raise Exception("no channel found in arguments")
+				if not chan.registered:
+					raise IrcMsgException(user, "'%s' is not a registered channel" %
+						chan.name)
 				if not chan.find_role(user) is operrole:
 					raise IrcMsgException(user, "'%s' is not a channel operator on '%s'" % (
 						user.nick, chan.name))
-			else:
+			else:  # for help
 				assert args is None
 				# when serving help pages, we list the channel commands if the user is
 				# channel operator on any channel
 				if not userlevel is operlevel and \
-						not any(chan.find_role(user) is operrole
+						not any(chan.registered and chan.find_role(user) is operrole
 								for chan in self.server.get_channels_with_user(user)):
 					raise IrcMsgException(user, "user is not channel operator on any channel")
 			return  # ok
