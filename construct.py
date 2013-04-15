@@ -1513,11 +1513,10 @@ def main(configfile):
 	try:
 		hand.read_until_server_connect()
 
-		construct = Construct(server, **config['construct'])
+		construct = Construct(server, **config['service'])
 		construct.introduce()
 
-		if 'oper' in config:  # insert initial user into database
-			oper = config['oper']
+		for oper in config.get('opers', []):  # insert initial user into database
 			profile = server.find_profile_by_nickname(oper['nick'])
 			if not profile:
 				profile = server.create_profile(oper['nick'], oper['password'])
