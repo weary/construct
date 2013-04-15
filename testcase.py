@@ -76,7 +76,7 @@ class TestUser(object):
 	def join(self, channel):
 		self.clearlines()
 		self.send(":%s JOIN %s" % (self.nick, channel))
-		self.wait_for_line(":%s!%s@i.love.debian.org JOIN :%s" % (
+		self.wait_for_line(":%s!%s@127.0.0.1 JOIN :%s" % (
 			self.nick, self.username, channel))
 
 	def part(self, channel):
@@ -183,11 +183,11 @@ if __name__ == "__main__":
 
 	# no roles/policy/etc, everyone can join
 	guest.join('#testchan')
-	chanoper.wait_for_line(":gUest!guest1@i.love.debian.org JOIN :#testchan")
+	chanoper.wait_for_line(":gUest!guest1@127.0.0.1 JOIN :#testchan")
 	allowed.join('#testchan')
-	chanoper.wait_for_line(":aLlowed!allowed1@i.love.debian.org JOIN :#testchan")
+	chanoper.wait_for_line(":aLlowed!allowed1@127.0.0.1 JOIN :#testchan")
 	banned.join('#testchan')
-	chanoper.wait_for_line(":bAnned!banned1@i.love.debian.org JOIN :#testchan")
+	chanoper.wait_for_line(":bAnned!banned1@127.0.0.1 JOIN :#testchan")
 	assert chanoper.names('#testchan') == set(
 			['gUest', 'aLlowed', 'bAnned', '@cHanoper'])
 
@@ -220,7 +220,7 @@ if __name__ == "__main__":
 	assert chanoper.names('#testchan') == set(['@cHanoper'])
 	chanoper.cmd("channel allow #testchan allowed")
 	allowed.join('#testchan')
-	chanoper.wait_for_line(":aLlowed!allowed1@i.love.debian.org JOIN :#testchan")
+	chanoper.wait_for_line(":aLlowed!allowed1@127.0.0.1 JOIN :#testchan")
 	assert chanoper.names('#testchan') == set(['@cHanoper', 'aLlowed'])
 	chanoper.cmd("channel oper #testchan allowed")
 	chanoper.cmd("channel allow #testchan chanoper")
