@@ -675,7 +675,7 @@ class Server(UserDB, ChannelDB, ProfileDB):
 		self.description = conf.get('description', '')
 		self.handler = None
 		self.construct = None
-		self.db = ConstructDatabase("construct.db")
+		self.db = ConstructDatabase(conf.get('db', "construct.db"))
 		self.password_timeout = conf.get('password_timeout', 30)
 
 	def rehash(self):
