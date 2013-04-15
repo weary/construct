@@ -398,7 +398,7 @@ class Channel(object):
 		self.users[user] = newmode
 
 		try:
-			if whodidit and 'o' in modechange:
+			if whodidit and 'o' in modechange and self.registered:
 				if self.is_channel_operator(whodidit) and user.profile:
 					if modechange[0] == '+':
 						self.set_role(whodidit, user.profile, operrole)
