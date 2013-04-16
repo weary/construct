@@ -155,8 +155,10 @@ if __name__ == "__main__":
 	serveroper.join("#soonempty")
 	serveroper.part("#soonempty")
 
-	allowed.cmd("register allowedpass")
+	allowed.cmd("register dumbpass")
 	banned.cmd("register bannedpass")
+
+	allowed.cmd("passwd dumbpass allowedpass")
 
 	chanoper.cmd("register chanoperpass")
 	serveroper.cmd("confirm %s Channel -Confirmed- Operator chanoper@someemail" % chanoper.nick)

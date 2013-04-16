@@ -1219,10 +1219,13 @@ class Construct(object):
 		if user:
 			self.server.fix_user_on_all_channels(user)
 
-	def cmd_passwd(self, caller, profile, cmd, oldpass, newpass):
+	def cmd_passwd(self, caller, cmd, oldpass, newpass):
 		""" registered
 		1.6 passwd <oldpass> <newpass>
 		Change password for current profile """
+		profile = self.server.find_profile_by_nickname(caller.nick)
+		if not profile:
+			raise IrcMsgException(caller, "No profile associated with your nick, please identify or register first")
 		profile.test_password(oldpass, caller, "error, old password invalid")
 		profile.reset_password(newpass)
 
