@@ -449,7 +449,7 @@ class Profile(object):
 		self.register_nick = nickname
 		self.level = registeredlevel  # if we have a profile we are registered
 		self.password = None
-		self.last_password_guess_time = 0
+		self.last_password_failed_time = 0
 		self.realname = None
 		self.email = None
 		if password[:3] == '$C$':
@@ -471,14 +471,14 @@ class Profile(object):
 		""" will throw on invalid password """
 		now = time.time()
 		timeout = self.parent.password_timeout
-		if now - self.last_password_guess_time < timeout:
+		if now - self.last_password_failed_time < timeout:
 			raise IrcMsgException(
 					caller,
 					"error, wait %s seconds between password guess attempts" % timeout)
-		self.last_password_guess_time = now
 		assert self.password[:3] == '$C$'
 		salt, digest = self.password[3:].split('$', 1)
 		if digest != Profile.getDigest(testpass, salt)[1]:
+			self.last_password_failed_time = now
 			if msg is None:
 				msg = "error, invalid password for '%s'" % self.register_nick
 			raise IrcMsgException(caller, msg)
