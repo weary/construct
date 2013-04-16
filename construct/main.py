@@ -1132,7 +1132,7 @@ class Construct(object):
 		# someone else already using this profile??
 		user_ = self.server.get_user_for_profile(profile)
 		if user_ and not user_ is caller:
-			self.server.kill_user(user_, "Ghosted by %s" % caller.nick)
+			self.server.kill_user(user_, "ghosted by %s" % caller.nick)
 
 		caller.identify(profile)
 		if profile.level is operlevel:
