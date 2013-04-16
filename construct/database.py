@@ -1,7 +1,7 @@
 import sqlite3
 import logging
 
-from construct_consts import \
+from .consts import \
 		registeredlevel, confirmedlevel, operlevel, \
 		banrole, allowrole, operrole
 

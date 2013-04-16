@@ -1,29 +1,25 @@
-#!/usr/bin/python
-
-import argparse
-import json
-import socket
-import logging
-import re
-import time
-import traceback
 import base64
 import hashlib
+import json
+import logging
 import os
+import re
+import socket
+import time
+import traceback
 from collections import defaultdict
-from functools import wraps
 from copy import copy
+from functools import wraps
 
-from construct_database import ConstructDatabase
-from construct_commandcontainer import CommandContainer, ParseException
-from construct_consts import \
+from .database import ConstructDatabase
+from .commandcontainer import CommandContainer, ParseException
+from .consts import \
 		guestlevel, registeredlevel, confirmedlevel, operlevel, \
 		banrole, allowrole, operrole
 
-log = logging.getLogger('construct')
+log = logging.getLogger('main')
 
-# FIXME: Should keep profiles/roles in database
-# FIXME: Think of a secure way to keep user-registrations acros restarts
+# FIXME: Think of a secure way to keep user-registrations accros restarts
 
 pingre = re.compile("PING :(.*)".replace(' ', '\s+'))
 passre = re.compile("PASS (\S+) TS.*".replace(' ', '\s+'))
@@ -1534,24 +1530,4 @@ def main(configfile):
 		hand.read_all()
 	finally:
 		hand.disconnect()
-
-
-if __name__ == "__main__":
-	FORMAT = '#%(message)s'
-	logging.basicConfig(level=logging.INFO, format=FORMAT)
-
-	parser__ = argparse.ArgumentParser(description='(More) secure irc user management')
-	parser__.add_argument('--config', '-c', type=str, help='config file', required=True)
-	args__ = parser__.parse_args()
-
-	starting = True
-	while starting:
-		starting = False
-		try:
-			main(args__.config)
-		except RestartException:
-			# FIXME: should exec here
-			starting = True
-
-
 

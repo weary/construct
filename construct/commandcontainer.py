@@ -3,7 +3,7 @@ import logging
 import re
 from collections import namedtuple
 
-from construct_consts import ConstructLevel, \
+from .consts import ConstructLevel, \
 		guestlevel, registeredlevel, confirmedlevel, operlevel
 
 log = logging.getLogger('cmdhandling')
