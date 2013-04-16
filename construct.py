@@ -2,7 +2,7 @@
 
 import argparse
 import logging
-from construct.main import main, RestartException
+import construct.main
 
 if __name__ == "__main__":
 	FORMAT = '#%(message)s'
@@ -15,10 +15,12 @@ if __name__ == "__main__":
 	starting = True
 	initial_identified = []
 	while starting:
+		reload(construct.main)
 		starting = False
 		try:
-			main(args__.config)
-		except RestartException:
+			construct.main.main(args__.config, initial_identified)
+		except construct.main.RestartException, e:
+			initial_identified = e.identified_users
 			starting = True
 
 

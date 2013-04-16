@@ -590,6 +590,14 @@ class UserDB(object):
 		assert self.get_user(newnick) is None
 		user = User(newnick, username, hostname)
 		self.users.append(user)
+		if self.in_startup():
+			register_nick = self.initial_identified.get(newnick)
+			if not register_nick is None:
+				log.info("startup: user '%s' automatically identified with profile '%s'" % (
+					newnick, register_nick))
+				profile = self.find_profile_by_nickname(register_nick)
+				user.identify(profile)
+
 		#print "created user '%s', current users: %s" % (
 		#		user.nick, ', '.join(u.nick for u in self.users))
 		return user
@@ -619,6 +627,12 @@ class UserDB(object):
 			return None
 		assert len(out) == 1
 		return out[0]
+
+	def get_identified_users(self):
+		return [
+				(user.nick, user.profile.register_nick)
+				for user in self.users
+				if user.profile]
 
 	def privmsg_serverops(self, msg):
 		for user in self.get_serveropers():
@@ -663,7 +677,7 @@ class User(object):
 
 
 class Server(UserDB, ChannelDB, ProfileDB):
-	def __init__(self, conf):
+	def __init__(self, conf, initial_identified):
 		super(Server, self).__init__()
 		self.name = conf['name']
 		if self.name.find('.') < 0:
@@ -673,6 +687,26 @@ class Server(UserDB, ChannelDB, ProfileDB):
 		self.construct = None
 		self.db = ConstructDatabase(conf.get('db', "construct.db"))
 		self.password_timeout = conf.get('password_timeout', 30)
+		self.in_startup_timer = time.time()
+		self.initial_identified = dict(initial_identified)
+
+	def in_startup(self):
+		if self.in_startup_timer is None:
+			return False
+		if time.time() > self.in_startup_timer + 10:
+			self.finish_startup()
+			return False
+		return True
+
+	def finish_startup(self):
+		self.in_startup_timer = None
+		msg = "finished starting"
+		msg += ", received %d users and %d channels from server" % (
+				len(self.users), len(self.channels))
+		initial = len(self.get_identified_users())
+		if initial:
+			msg += ", %d users already identified" % initial
+		self.notice_serverops(msg)
 
 	def rehash(self):
 		log.info("Starting rehash")
@@ -797,6 +831,8 @@ class Handler(object):
 
 	def msg_ping(self, who):
 		self.send("PONG :" + who)
+		if self.server.in_startup():
+			self.server.finish_startup()
 
 	def msg_pass(self, pass_):
 		if pass_ != self.accept_password:
@@ -1459,12 +1495,14 @@ class Construct(object):
 		""" oper
 		3.7 rehash
 		re-read profiles/channels/roles from database and update state """
+		self.server.notice_serverops("re-reading database")
 		self.server.rehash()
 
 	def cmd_restart(self, oper, cmd):
 		""" oper
 		3.8 restart
 		Restart the construct. Use with care. """
+		self.server.notice_serverops("%s issued restart, brb" % oper.nick)
 		raise RestartException()
 
 	def extract_channel_from_args(self, user, args):
@@ -1504,11 +1542,11 @@ class Construct(object):
 		self.notice(caller, "OK")
 
 
-def main(configfile):
+def main(configfile, initial_identified):
 	# FIXME: would like to have the configfile in a similar format as ircd.conf
 	# FIXME: at least some format that allows comments
 	config = json.load(open(configfile))
-	server = Server(config['server'])
+	server = Server(config['server'], initial_identified)
 
 	hand = Handler(server, **config['connect'])
 	hand.connect()
@@ -1528,6 +1566,9 @@ def main(configfile):
 			profile.update_db()
 
 		hand.read_all()
+	except RestartException, e:
+		e.identified_users = server.get_identified_users()
+		raise
 	finally:
 		hand.disconnect()
 
