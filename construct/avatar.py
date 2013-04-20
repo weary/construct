@@ -292,7 +292,7 @@ class Avatar(object):
 				if nick and not password:  # parser might have gotten it wrong
 					nick, password = password, nick
 				profile = caller.profile
-			profile.test_password(password)
+			profile.test_password(password, caller)
 
 		user = self.core.users.get_user_for_profile(profile)
 		if user:
@@ -554,23 +554,6 @@ class Avatar(object):
 		Restart the construct. Use with care. """
 		self.core.users.notice_serverops("%s issued restart, brb" % oper.nick)
 		raise RestartException()
-
-	def extract_channel_from_args(self, user, args):
-		argssplit = args.strip().split(' ', 1)
-		if len(argssplit) == 0:
-			raise IrcMsgException(user, "Missing channelname")
-		elif len(argssplit) == 1:
-			channame, rest = argssplit[0], ''
-		else:
-			channame, rest = argssplit
-
-		if not channame:
-			raise IrcMsgException(user, "No channel specified")
-
-		chan = self.core.channels.get_channel(channame)
-		if not chan:
-			raise IrcMsgException(user, "Unknown channel '%s'" % channame)
-		return (chan, rest)
 
 	def recv(self, caller, msg):
 		msg = msg.strip()

@@ -87,6 +87,10 @@ class TestUser(object):
 		self.clearlines()
 		self.send(":%s KICK %s :%s" % (self.nick, channel, who))
 
+	def mode(self, channel, who, modechange):
+		self.clearlines()
+		self.send("MODE %s %s %s" % (channel, modechange, who))
+
 	def clearlines(self):
 		with self.linelock:
 			#for line in self.lines:
@@ -146,6 +150,10 @@ if __name__ == "__main__":
 	serveroper.cmd("channel unregister #testchan", True)
 	serveroper.wait_for_line(":construct!-@- NOTICE %s :" % serveroper.nick)
 
+	serveroper.cmd("id serveroperpass", True)
+	serveroper.wait_for_line(":construct!-@- NOTICE %s :already identified" % serveroper.nick)
+	serveroper.cmd("reid serveroperpass")
+
 	chanoper = TestUser("cHanoper", "chanoper1", "ChanOper")
 	guest = TestUser("gUest", "guest1", "Guest")
 	allowed = TestUser("aLlowed", "allowed1", "Allowed")
@@ -156,6 +164,8 @@ if __name__ == "__main__":
 	serveroper.part("#soonempty")
 
 	allowed.cmd("register dumbpass")
+	allowed.cmd("register dumbpass", True)
+	allowed.wait_for_line(":construct!-@- NOTICE aLlowed :User aLlowed already registered")
 	banned.cmd("register bannedpass")
 
 	allowed.cmd("passwd dumbpass allowedpass")
@@ -177,10 +187,16 @@ if __name__ == "__main__":
 	chanoper = chanoper2
 	chanoper.nickchange("cHanoper")
 
+	serveroper.cmd("rehash")
+	serveroper.cmd("restart", True)
+	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :finished starting")
+
 	serveroper.cmd("confirm %s stomme naam fout@email" % allowed.nick)
 	serveroper.cmd("unconfirm %s" % allowed.nick)
 
 	chanoper.join("#testchan")
+	chanoper.cmd("register #testchan", True)
+	chanoper.wait_for_line(":construct!-@- NOTICE %s :Trying to register a channel" % chanoper.nick)
 	chanoper.cmd("channel register #testchan")
 
 	# no roles/policy/etc, everyone can join
@@ -192,6 +208,16 @@ if __name__ == "__main__":
 	chanoper.wait_for_line(":bAnned!banned1@127.0.0.1 JOIN :#testchan")
 	assert chanoper.names('#testchan') == set(
 			['gUest', 'aLlowed', 'bAnned', '@cHanoper'])
+
+	chanoper.mode("#testchan", allowed.nick, "+o")
+	allowed.wait_for_line(":cHanoper!chanoper2@127.0.0.1 MODE #testchan +o aLlowed")
+	chanoper.cmd("channel roles #testchan", True)
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :- aLlowed oper")
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :total 2 role(s) defined for #testchan")
+	chanoper.mode("#testchan", allowed.nick, "-o")
+	allowed.wait_for_line(":cHanoper!chanoper2@127.0.0.1 MODE #testchan -o aLlowed")
+	chanoper.cmd("channel roles #testchan", True)
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :total 1 role(s) defined for #testchan")
 
 	chanoper.part('#testchan')
 	chanoper.join('#testchan')
@@ -249,11 +275,17 @@ if __name__ == "__main__":
 	serveroper.cmd("list channels")
 	serveroper.wait_for_line(":construct!-@- NOTICE sErveroper :- #testchan 1 users (not registered)")
 
+	chanoper.cmd("unregister banned aap", True)
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :You can only unregister your own profile")
+	chanoper.cmd("unregister chanoper", True)
+	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :error, invalid password for 'cHanoper'")
+	serveroper.cmd("unregister allowed")
 
 	serveroper.cmd("kill banned")
 
 	serveroper.cmd("help")
 	serveroper.cmd("help list channels")
+	serveroper.cmd("unid")
 
 
 	print

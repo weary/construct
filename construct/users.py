@@ -28,7 +28,7 @@ class UserDB(object):
 		if not register_nick is None:
 			log.info("startup: user '%s' automatically identified with profile '%s'" % (
 				newnick, register_nick))
-			profile = self.find_profile_by_nickname(register_nick)
+			profile = self.core.profiles.find_profile_by_nickname(register_nick)
 			user.identify(profile)
 		return user
 
