@@ -16,6 +16,7 @@ from .commandcontainer import CommandContainer, ParseException
 from .consts import \
 		guestlevel, registeredlevel, confirmedlevel, operlevel, \
 		banrole, allowrole, operrole
+from .irc_connection import IrcConnection
 
 log = logging.getLogger('main')
 
@@ -101,15 +102,15 @@ class RestartException(Exception):
 
 
 class ChannelDB(object):
-	def __init__(self):
-		super(ChannelDB, self).__init__()
+	def __init__(self, core):
+		self.core = core
 		self.channels = dict()  # name -> channel
 
 	def rehash(self):  # re-read registered channels from db
 		old = self.channels
 		self.channels = dict()
 
-		for name, guests, policy in self.db.get_channels():
+		for name, guests, policy in self.core.db.get_channels():
 			name = name.lower()
 			chan = old.pop(name, None)
 			if not chan:
@@ -129,7 +130,7 @@ class ChannelDB(object):
 				self.channels[name] = chan
 
 		roles = defaultdict(dict)
-		for chan, profileid, role in self.db.get_roles():
+		for chan, profileid, role in self.core.db.get_roles():
 			roles[chan][profileid] = role
 		for chan in self.get_all_channels():
 			chan.roles = roles.get(chan.name, {})
@@ -201,7 +202,7 @@ class Channel(object):
 
 	def register(self):
 		self.registered = True
-		self.parent.db.create_channel(
+		self.parent.core.db.create_channel(
 				self.name, self.allow_guests, self.default_policy_allow)
 
 	def unregister(self):
@@ -209,7 +210,7 @@ class Channel(object):
 			return
 
 		self.registered = False
-		self.parent.db.delete_channel(self.name)
+		self.parent.core.db.delete_channel(self.name)
 		if not self.users:
 			self.parent.channel_empty(self)
 
@@ -222,7 +223,7 @@ class Channel(object):
 	@channel_registered
 	def set_allow_guests(self, oper, allow_):
 		self.allow_guests = allow_
-		self.parent.db.update_channel(
+		self.parent.core.db.update_channel(
 				self.name, self.allow_guests, self.default_policy_allow)
 
 	@channel_registered
@@ -235,7 +236,7 @@ class Channel(object):
 			raise IrcMsgException(
 					oper,
 					"Invalid channel policy '%s'" % newpolicy)
-		self.parent.db.update_channel(
+		self.parent.core.db.update_channel(
 				self.name, self.allow_guests, self.default_policy_allow)
 
 	@channel_registered
@@ -244,10 +245,10 @@ class Channel(object):
 			raise IrcMsgException(oper, "Guest users cannot have roles, must register first")
 		if role:
 			self.roles[profile.profileid] = role
-			self.parent.db.create_role(self.name, profile.profileid, role)
+			self.parent.core.db.create_role(self.name, profile.profileid, role)
 		else:
 			del self.roles[profile.profileid]
-			self.parent.db.delete_role(self.name, profile.profileid)
+			self.parent.core.db.delete_role(self.name, profile.profileid)
 
 	def del_role(self, oper, profile):
 		self.set_role(oper, profile, None)
@@ -256,7 +257,7 @@ class Channel(object):
 	def get_roles(self, oper):
 		out = []
 		for profileid, role in self.roles.iteritems():
-			profile = self.parent.find_profile_by_id(profileid)
+			profile = self.parent.core.profiles.find_profile_by_id(profileid)
 			if not profile:
 				raise Exception("self.roles broken in channel %s" % self.name)
 			out.append((profile, role))
@@ -432,7 +433,7 @@ class Channel(object):
 		del self.users[user]
 
 	def send(self, msg):
-		self.parent.construct.send(msg)
+		self.parent.core.avatar.send(msg)
 
 	def __str__(self):
 		return "Channel(%s)" % self.name
@@ -466,7 +467,7 @@ class Profile(object):
 	def test_password(self, testpass, caller, msg=None):
 		""" will throw on invalid password """
 		now = time.time()
-		timeout = self.parent.password_timeout
+		timeout = self.parent.core.password_timeout
 		if now - self.last_password_failed_time < timeout:
 			raise IrcMsgException(
 					caller,
@@ -503,14 +504,14 @@ class Profile(object):
 		return self.level is operlevel or self.level is confirmedlevel
 
 	def update_db(self):
-		self.parent.db.update_profile(
+		self.parent.core.db.update_profile(
 				self.profileid, self.register_nick, self.level, self.password,
 				self.realname, self.email)
 
 
 class ProfileDB(object):
-	def __init__(self):
-		super(ProfileDB, self).__init__()
+	def __init__(self, core):
+		self.core = core
 		self.profiles = list()
 		self.next_id = 1
 
@@ -518,7 +519,7 @@ class ProfileDB(object):
 		old = {p.profileid:p for p in self.profiles}
 		self.profiles = list()
 		self.next_id = 1
-		for id_, nick, lvl, pwd, rn, email in self.db.get_profiles():
+		for id_, nick, lvl, pwd, rn, email in self.core.db.get_profiles():
 			if id_ >= self.next_id:
 				self.next_id = id_ + 1
 			prof = old.pop(id_, None)
@@ -535,7 +536,7 @@ class ProfileDB(object):
 		# any profiles lost from database?
 		for prof in old.itervalues():
 			log.info("Rehash: removed profile %s" % prof.register_nick)
-			user = self.get_user_for_profile(prof)
+			user = self.core.users.get_user_for_profile(prof)
 			if user:
 				log.info("Rehash: user %s unidentified due to lost profile" % user.nick)
 				user.unidentify()
@@ -559,22 +560,22 @@ class ProfileDB(object):
 		self.next_id += 1
 		p = Profile(self, id_, nickname, password)
 		self.profiles.append(p)
-		self.db.create_profile(
+		self.core.db.create_profile(
 				p.profileid, p.register_nick, p.level, p.password)
 		return p
 
 	def drop_profile(self, profile):
 		self.profiles = [p for p in self.profiles
 				if p != profile]
-		self.db.delete_profile(profile.profileid)
+		self.core.db.delete_profile(profile.profileid)
 
 	def get_all_profiles(self):
 		return self.profiles
 
 
 class UserDB(object):
-	def __init__(self):
-		super(UserDB, self).__init__()
+	def __init__(self, core):
+		self.core = core
 		self.users = list()
 
 	def get_user(self, needednick, defaultval=None):
@@ -590,22 +591,16 @@ class UserDB(object):
 		assert self.get_user(newnick) is None
 		user = User(newnick, username, hostname)
 		self.users.append(user)
-		if self.in_startup():
-			register_nick = self.initial_identified.get(newnick)
-			if not register_nick is None:
-				log.info("startup: user '%s' automatically identified with profile '%s'" % (
-					newnick, register_nick))
-				profile = self.find_profile_by_nickname(register_nick)
-				user.identify(profile)
-
-		#print "created user '%s', current users: %s" % (
-		#		user.nick, ', '.join(u.nick for u in self.users))
+		register_nick = self.core.can_auto_identify(newnick)
+		if not register_nick is None:
+			log.info("startup: user '%s' automatically identified with profile '%s'" % (
+				newnick, register_nick))
+			profile = self.find_profile_by_nickname(register_nick)
+			user.identify(profile)
 		return user
 
 	def remove_user(self, user):
 		self.users.remove(user)
-		#print "removed user '%s', current users: %s" % (
-		#		nick, ', '.join(u.nick for u in self.users))
 
 	def get_serveropers(self):
 		out = []
@@ -636,15 +631,15 @@ class UserDB(object):
 
 	def privmsg_serverops(self, msg):
 		for user in self.get_serveropers():
-			self.construct.privmsg(user, msg)
+			self.core.avatar.privmsg(user, msg)
 
 	def notice_serverops(self, msg):
 		for user in self.get_serveropers():
-			self.construct.notice(user, msg)
+			self.core.avatar.notice(user, msg)
 
 	def kill_user(self, user, reason):
 		log.info("User %s killed, %s", user.nick, reason)
-		self.send("KILL %s :HOP %s" % (user.nick, reason))
+		self.core.shandler.send("KILL %s :HOP %s" % (user.nick, reason))
 		self.remove_user(user)
 
 
@@ -676,19 +671,56 @@ class User(object):
 			return self.profile.level
 
 
-class Server(UserDB, ChannelDB, ProfileDB):
+class Core(object):
 	def __init__(self, conf, initial_identified):
-		super(Server, self).__init__()
-		self.name = conf['name']
-		if self.name.find('.') < 0:
-			raise Exception("server name('%s') must contain a dot" % self.name)
-		self.description = conf.get('description', '')
-		self.handler = None
-		self.construct = None
+		self.shandler = ServerHandler(
+				self,
+				conf['connect']['send_password'],
+				conf['connect']['accept_password'],
+				conf['connect']['host'],
+				conf['connect']['port'],
+				conf['server']['name'],
+				conf['server'].get('description', ''))
+		self.channels = ChannelDB(self)
+		self.profiles = ProfileDB(self)
+		self.users = UserDB(self)
+
 		self.db = ConstructDatabase(conf.get('db', "construct.db"))
 		self.password_timeout = conf.get('password_timeout', 30)
-		self.in_startup_timer = time.time()
 		self.initial_identified = dict(initial_identified)
+
+		self.avatar = Avatar(
+				self,
+				conf['service']['nick'],
+				conf['service'].get('description'))
+
+		self.rehash()  # read initial state from database
+
+		for oper in conf.get('opers', []):  # insert initial user into database
+			profile = self.profiles.find_profile_by_nickname(oper['nick'])
+			if not profile:
+				profile = self.profiles.create_profile(oper['nick'], oper['password'])
+			profile.level = operlevel
+			profile.realname = oper.get('realname', '')
+			profile.reset_password(oper['password'])
+			profile.update_db()
+
+	def run(self):
+		self.in_startup_timer = time.time()
+
+		self.shandler.connect()
+		try:
+			self.shandler.read_until_server_connect()
+			log.info("server connected")
+
+			self.avatar.introduce()
+
+			self.shandler.read_all()
+		except RestartException, e:
+			e.identified_users = self.users.get_identified_users()
+			raise
+		finally:
+			self.shandler.disconnect()
 
 	def in_startup(self):
 		if self.in_startup_timer is None:
@@ -698,108 +730,51 @@ class Server(UserDB, ChannelDB, ProfileDB):
 			return False
 		return True
 
+	def can_auto_identify(self, newnick):
+		""" returns registered_nick from profile if allowed, None otherwise """
+		if not self.in_startup():
+			return None
+		return self.initial_identified.get(newnick)
+
 	def finish_startup(self):
 		self.in_startup_timer = None
 		msg = "finished starting"
 		msg += ", received %d users and %d channels from server" % (
-				len(self.users), len(self.channels))
-		initial = len(self.get_identified_users())
+				len(self.users.users), len(self.channels.channels))
+		initial = len(self.users.get_identified_users())
 		if initial:
 			msg += ", %d users already identified" % initial
-		self.notice_serverops(msg)
+		self.users.notice_serverops(msg)
 
 	def rehash(self):
 		log.info("Starting rehash")
-		ChannelDB.rehash(self)
-		ProfileDB.rehash(self)
-		for chan in self.get_all_channels():
+		self.channels.rehash()
+		self.profiles.rehash()
+		for chan in self.channels.get_all_channels():
 			chan.fix_all_users()
 		log.info("Done rehash")
 
-	def set_handler(self, han):
-		self.handler = han
-
-	def set_construct(self, construct):
-		self.construct = construct
-
-	def send_server_string(self):
-		self.handler.send(
-				"SERVER %s 1 :%s" % (
-					self.name, self.description))
-
-	def send(self, msg):
-		self.handler.send(":%s %s" % (self.name, msg))
 
 
-class IrcLineConnection(object):
-	def __init__(self, host, port):
-		self.host = host
-		self.port = port
-		self.socket = None
-		self.writelinecache = ''
-		self.readlinecache = []
-
-	def connect(self):
-		# FIXME: allow ssl
-		self.socket = socket.create_connection(
-				(self.host, self.port))
-
-	def disconnect(self):
-		self.socket.close()
-		self.socket = None
-
-	def write(self, line):
-		lines = line
-		if self.writelinecache:
-			lines = self.writelinecache + line
-			self.writelinecache = None
-
-		lines = lines.split('\n')
-		self.writelinecache = lines[-1]
-		lines = lines[:-1]
-
-		for l in lines:
-			log.debug("w: %s" % l)
-			self.socket.send(l + '\r\n')
-
-	def __iter__(self):
-		return self
-
-	def next(self):
-		while len(self.readlinecache) < 2:
-			newdata = self.socket.recv(100)
-			data = newdata
-			if self.readlinecache:
-				data = self.readlinecache[0] + newdata
-
-			self.readlinecache = data.split('\n')
-
-			if newdata == '':
-				self.readlinecache.append(None)
-				self.readlinecache.append(None)
-
-		r = self.readlinecache[0]
-		del self.readlinecache[0]
-		if r == None:
-			raise StopIteration()
-		log.debug("r: %s" % r)
-		return r
-
-
-class Handler(object):
+class ServerHandler(object):
 	def __init__(
 			self,
-			server,
+			core,
 			send_password,
 			accept_password,
-			host, port
+			host, port,  # remote
+			name, description  # us
 			):
-		self.con = IrcLineConnection(host, port)
-		self.server = server
-		server.set_handler(self)
+		self.con = IrcConnection(host, port)
+		self.core = core
 		self.accept_password = accept_password
 		self.send_password = send_password
 		self.serverstate = None
+
+		self.name = name
+		if self.name.find('.') < 0:
+			raise Exception("server name('%s') must contain a dot" % self.name)
+		self.description = description
 
 		self.msgs = (
 				(pingre, self.msg_ping),
@@ -823,7 +798,7 @@ class Handler(object):
 	def connect(self):
 		self.con.connect()
 		self.send("PASS %s :TS" % self.send_password)
-		self.server.send_server_string()
+		self.send("SERVER %s 1 :%s" % (self.name, self.description))
 
 	def disconnect(self):
 		self.con.disconnect()
@@ -831,8 +806,8 @@ class Handler(object):
 
 	def msg_ping(self, who):
 		self.send("PONG :" + who)
-		if self.server.in_startup():
-			self.server.finish_startup()
+		if self.core.in_startup():
+			self.core.finish_startup()
 
 	def msg_pass(self, pass_):
 		if pass_ != self.accept_password:
@@ -848,27 +823,27 @@ class Handler(object):
 		self.serverstate = "connected"
 
 	def msg_kill(self, who, reason):
-		if who == self.server.construct.nick:
+		if who == self.core.avatar.nick:
 			raise Exception("Server killed our construct: %s" % reason)
 
 	def msg_nick(self, newnick, username, hostname):
-		user = self.server.get_user(newnick)
+		user = self.core.users.get_user(newnick)
 		if user:
 			raise OperMsgException(
 					"User %s already known" % newnick)
-		user = self.server.create_user(newnick, username, hostname)
-		self.server.fix_user_on_all_channels(user)
+		user = self.core.users.create_user(newnick, username, hostname)
+		self.core.channels.fix_user_on_all_channels(user)
 
 	def msg_nickchange(self, oldnick, newnick):
-		user = self.server.get_user(oldnick)
+		user = self.core.users.get_user(oldnick)
 		if not user:
 			raise OperMsgException(
 					"no such user %s" % oldnick)
 		user.nickchange(newnick)
-		self.server.fix_user_on_all_channels(user)
+		self.core.channels.fix_user_on_all_channels(user)
 
 	def msg_sjoin(self, channame, nicks):
-		chan = self.server.get_or_create_channel(channame)
+		chan = self.core.channels.get_or_create_channel(channame)
 		for nick in nicks.split():
 			mode = ''
 			if '@' in nick:
@@ -877,45 +852,45 @@ class Handler(object):
 			if '+' in nick:
 				mode += 'v'
 				nick = nick.replace('+', '')
-			user = self.server.get_user(nick)
+			user = self.core.users.get_user(nick)
 			if not user:
 				raise OperMsgException(
 						"joining user %s does not exist" % nick)
 			chan.join(user, mode)
 
 	def msg_part(self, nick, channame):
-		chan = self.server.get_channel(channame)
+		chan = self.core.channels.get_channel(channame)
 		if not chan:
 			raise OperMsgException(
 					"no such channel '%s' where user %s parts from" % (
 						channame, nick))
-		user = self.server.get_user(nick)
+		user = self.core.users.get_user(nick)
 		if not user:
 			raise OperMsgException(
 					"parting user %s does not exist" % nick)
 		chan.part(user)
 
 	def msg_kick(self, channame, nick, reason):
-		chan = self.server.get_channel(channame)
+		chan = self.core.channels.get_channel(channame)
 		if not chan:
 			raise OperMsgException(
 					"no such channel '%s' where user %s is kicked from" % (
 						channame, nick))
-		user = self.server.get_user(nick)
+		user = self.core.users.get_user(nick)
 		if not user:
 			raise OperMsgException(
 					"parting user %s does not exist" % nick)
 		chan.kick(user)
 
 	def msg_mode(self, chanoper, channame, modechange, nicks):
-		chan = self.server.get_channel(channame)
+		chan = self.core.channels.get_channel(channame)
 		if not chan:
 			raise OperMsgException(
 					"no such channel '%s' where user(s) %s are mode-changed" % (
 						channame, nicks))
-		chanoper = self.server.get_user(chanoper)
+		chanoper = self.core.users.get_user(chanoper)
 		for nick in nicks.split():
-			user = self.server.get_user(nick)
+			user = self.core.users.get_user(nick)
 			if not user:
 				raise OperMsgException(
 						"mode-change for non-existing user %s" %
@@ -924,15 +899,15 @@ class Handler(object):
 		chan.fix_all_users()
 
 	def msg_quit(self, who, reason):
-		user = self.server.get_user(who)
-		self.server.channel_user_quit(user)
-		self.server.remove_user(user)
+		user = self.core.users.get_user(who)
+		self.core.channels.channel_user_quit(user)
+		self.core.users.remove_user(user)
 
 	def msg_privmsg(self, fromnick, tonick, msg):
-		construct = self.server.construct
-		if tonick == construct.nick:
-			user = self.server.get_user(fromnick)
-			construct.recv(user, msg)
+		avatar = self.core.avatar
+		if tonick == avatar.nick:
+			user = self.core.users.get_user(fromnick)
+			avatar.recv(user, msg)
 		else:
 			raise IrcMsgException(fromnick, "No such nick, '%s'" % tonick)
 
@@ -948,19 +923,19 @@ class Handler(object):
 			raise  # pass upwards
 		except IrcMsgException, e:
 			if e.user:
-				self.server.construct.notice(e.user, e.msg)
+				self.core.avatar.notice(e.user, e.msg)
 			else:
 				log.warning("Unknown user caused exception: %s" % e.msg)
 		except OperMsgException, e:
 			log.warning(e.msg)
-			self.server.privmsg_serverops(
+			self.core.users.privmsg_serverops(
 					"Exception: %s" % e.msg)
 		except Exception:
 			lines = traceback.format_exc()
 			for line in lines.split('\n'):
 				log.error(line)
 			for line in lines.split('\n'):
-				self.server.privmsg_serverops(line)
+				self.core.users.privmsg_serverops(line)
 
 	def read_all(self):
 		# read lines until disconnected
@@ -975,34 +950,20 @@ class Handler(object):
 		else:
 			raise Exception("Lost connection, while connecting")
 
-# decorator
-#def needs_profile(func):
-#	@wraps(func)
-#	def find_profile(self, user, *args):
-#		profile = user.profile
-#		if not profile:
-#			raise IrcMsgException(
-#					user,
-#					"No profiles registered for %s, " % user.nick +
-#					"not identified")
-#		func(self, user, profile, *args)
-#	return find_profile
 
 def fix_caller_afterwards(func):
 	@wraps(func)
 	def fix_user_afterwards_wrapper(self, user, *args1, **args2):
 		func(self, user, *args1, **args2)
-		self.server.fix_user_on_all_channels(user)
+		self.core.channels.fix_user_on_all_channels(user)
 	return fix_user_afterwards_wrapper
 
 
-class Construct(object):
-	def __init__(self, server, nick, description):
-		self.server = server
+class Avatar(object):
+	def __init__(self, core, nick, description):
+		self.core = core
 		self.nick = nick
 		self.description = description
-
-		server.set_construct(self)
 
 		# find commands and documentation
 		self.commands = CommandContainer()
@@ -1018,14 +979,12 @@ class Construct(object):
 		self.commands.register_chapter(3, "server operator commands")
 		self.commands.register_access_test(self.test_access)
 
-		server.rehash()  # read initial state from database
-
 	def test_access(self, cmd, args, user, forhelp):
 		""" test if user has access to command.
 		side-effect: if a channel was specified in args, replace it with the
 		channel object """
 		if args and 'chan' in args:
-			chan = self.server.get_channel(args['chan'])
+			chan = self.core.channels.get_channel(args['chan'])
 			if not chan:
 				raise IrcMsgException(user, "unknown channel '%s'" % args['chan'])
 			args['chan'] = chan
@@ -1062,7 +1021,7 @@ class Construct(object):
 				# channel operator on any channel
 				if not userlevel is operlevel and \
 						not any(chan.registered and chan.find_role(user) is operrole
-								for chan in self.server.get_channels_with_user(user)):
+								for chan in self.core.channels.get_channels_with_user(user)):
 					raise IrcMsgException(user, "user is not channel operator on any channel")
 			return  # ok
 
@@ -1080,13 +1039,13 @@ class Construct(object):
 		# it's OK
 
 	def introduce(self):
-		handler = self.server.handler
+		shandler = self.core.shandler
 		now = int(time.time())
-		servername = self.server.name
+		servername = shandler.name
 		msg = "NICK %s 1 %d +io %s %s %s :%s" % (
 				self.nick, now, "-", "-",
 				servername, self.description)
-		handler.send(msg)
+		shandler.send(msg)
 
 	def notice(self, who, msg):
 		if not msg:
@@ -1099,13 +1058,13 @@ class Construct(object):
 		self.send("PRIVMSG %s :%s" % (who.nick, msg))
 
 	def send(self, msg):
-		handler = self.server.handler
+		shandler = self.core.shandler
 		msg = ":%s %s" % (self.nick, msg)
-		handler.send(msg)
+		shandler.send(msg)
 
 	def find_a_profile_for_nick(self, asker, nick):
-		user = self.server.get_user(nick)
-		profile = self.server.find_profile_by_nickname(nick)
+		user = self.core.users.get_user(nick)
+		profile = self.core.profiles.find_profile_by_nickname(nick)
 		if user and profile:
 			if user.profile is profile:
 				return profile  # identified user
@@ -1118,7 +1077,7 @@ class Construct(object):
 		raise IrcMsgException(asker, "No profile found for '%s'" % nick)
 
 	def online_or_offline(self, profile):
-		user = self.server.get_user_for_profile(profile)
+		user = self.core.users.get_user_for_profile(profile)
 		if user:
 			if user.nick == profile.register_nick:
 				return "online"
@@ -1129,7 +1088,7 @@ class Construct(object):
 
 	def rolesline(self, profile):
 		roles = defaultdict(list)
-		for chan in self.server.get_all_channels():
+		for chan in self.core.channels.get_all_channels():
 			if not chan.registered:
 				continue
 			role = chan.get_role_for_profile(profile)
@@ -1157,7 +1116,7 @@ class Construct(object):
 					caller.profile.register_nick)
 
 		nick = nick or caller.nick
-		profile = self.server.find_profile_by_nickname(nick)
+		profile = self.core.profiles.find_profile_by_nickname(nick)
 		if not profile:
 			raise IrcMsgException(caller, "No profile for %s, please register first" % nick)
 		profile.test_password(password, caller)
@@ -1166,13 +1125,13 @@ class Construct(object):
 				(profile.realname or profile.register_nick))
 
 		# someone else already using this profile??
-		user_ = self.server.get_user_for_profile(profile)
+		user_ = self.core.users.get_user_for_profile(profile)
 		if user_ and not user_ is caller:
-			self.server.kill_user(user_, "ghosted by %s" % caller.nick)
+			self.core.users.kill_user(user_, "ghosted by %s" % caller.nick)
 
 		caller.identify(profile)
 		if profile.level is operlevel:
-			self.server.notice_serverops(
+			self.core.users.notice_serverops(
 					"%s just became server operator" % caller.nick)
 		assert caller.level() != guestlevel
 
@@ -1200,10 +1159,10 @@ class Construct(object):
 		""" guest
 		1.4 register <password>
 		Create a new profile for the current user """
-		if self.server.get_channel(password):
+		if self.core.channels.get_channel(password):
 			raise IrcMsgException(caller, "Trying to register a channel? try the 'register channel' command")
 
-		profile = self.server.find_profile_by_nickname(caller.nick)
+		profile = self.core.profiles.find_profile_by_nickname(caller.nick)
 		if profile:
 			raise IrcMsgException(caller, "User %s already registered" % caller.nick)
 
@@ -1211,7 +1170,7 @@ class Construct(object):
 			raise IrcMsgException(caller, "Please specify password")
 		if password.find(' ') >= 0:
 			raise IrcMsgException(caller, "No spaces allowed in password")
-		newprofile = self.server.create_profile(caller.nick, password)
+		newprofile = self.core.profiles.create_profile(caller.nick, password)
 		self.notice(caller, ("Successfully registered %s, please remember your " +
 				"password to identify next time") % caller.nick)
 		caller.identify(newprofile)
@@ -1244,18 +1203,18 @@ class Construct(object):
 				profile = caller.profile
 			profile.test_password(password)
 
-		user = self.server.get_user_for_profile(profile)
+		user = self.core.users.get_user_for_profile(profile)
 		if user:
 			user.unidentify()
-		self.server.drop_profile(profile)
+		self.core.profiles.drop_profile(profile)
 		if user:
-			self.server.fix_user_on_all_channels(user)
+			self.core.channels.fix_user_on_all_channels(user)
 
 	def cmd_passwd(self, caller, cmd, oldpass, newpass):
 		""" registered
 		1.6 passwd <oldpass> <newpass>
 		Change password for current profile """
-		profile = self.server.find_profile_by_nickname(caller.nick)
+		profile = self.core.profiles.find_profile_by_nickname(caller.nick)
 		if not profile:
 			raise IrcMsgException(caller, "No profile associated with your nick, please identify or register first")
 		profile.test_password(oldpass, caller, "error, old password invalid")
@@ -1340,7 +1299,7 @@ class Construct(object):
 		Allow <nick> on <chan> (only useful if channel policy is set to deny) """
 		profile = self.find_a_profile_for_nick(oper, nick)
 		chan.set_role(oper, profile, allowrole)
-		user = self.server.get_user_for_profile(profile)
+		user = self.core.users.get_user_for_profile(profile)
 		if user:
 			chan.fix_user_to_role(user)
 
@@ -1350,7 +1309,7 @@ class Construct(object):
 		Deny <nick> access to <chan> (only useful if channel policy is set to allow) """
 		profile = self.find_a_profile_for_nick(oper, nick)
 		chan.set_role(oper, profile, banrole)
-		user = self.server.get_user_for_profile(profile)
+		user = self.core.users.get_user_for_profile(profile)
 		if user:
 			chan.fix_user_to_role(user)
 
@@ -1360,7 +1319,7 @@ class Construct(object):
 		Make <nick> a channel opperator on <chan> """
 		profile = self.find_a_profile_for_nick(oper, nick)
 		chan.set_role(oper, profile, operrole)
-		user = self.server.get_user_for_profile(profile)
+		user = self.core.users.get_user_for_profile(profile)
 		if user:
 			chan.fix_user_to_role(user)
 
@@ -1370,7 +1329,7 @@ class Construct(object):
 		Remove any roles for <nick> on <chan> """
 		profile = self.find_a_profile_for_nick(oper, nick)
 		chan.set_role(oper, profile, None)
-		user = self.server.get_user_for_profile(profile)
+		user = self.core.users.get_user_for_profile(profile)
 		if user:
 			chan.fix_user_to_role(user)
 
@@ -1426,7 +1385,7 @@ class Construct(object):
 		""" oper
 		3.1 list channels
 		Show known channels """
-		channels = self.server.get_all_channels()
+		channels = self.core.channels.get_all_channels()
 		if not channels:
 			raise IrcMsgException(oper, "No channels found!")
 		for chan in channels:
@@ -1441,7 +1400,7 @@ class Construct(object):
 		""" oper
 		3.2 list profiles
 		Show registered profiles """
-		all_profiles = self.server.get_all_profiles()
+		all_profiles = self.core.profiles.get_all_profiles()
 		for prof in all_profiles:
 			status = self.online_or_offline(prof)
 			msg = "%s, %s, %s" % (prof.register_nick, status, prof.level)
@@ -1456,9 +1415,9 @@ class Construct(object):
 		Confirm a registered user really is who he says he is """
 		profile = self.find_a_profile_for_nick(oper, nick)
 		profile.confirm(realname, email)
-		user = self.server.get_user(nick)
+		user = self.core.users.get_user(nick)
 		if user:
-			self.server.fix_user_on_all_channels(user)
+			self.core.channels.fix_user_on_all_channels(user)
 
 	def cmd_unconfirm(self, oper, cmd, nick):
 		""" oper
@@ -1469,24 +1428,24 @@ class Construct(object):
 
 		profile.unconfirm()
 
-		user = self.server.get_user(nick)
+		user = self.core.users.get_user(nick)
 		if user:
-			self.server.fix_user_on_all_channels(user)
+			self.core.channels.fix_user_on_all_channels(user)
 
 	def cmd_kill(self, oper, cmd, nick):
 		""" oper
 		3.5 kill <nick>
 		Disconnect someone from the irc server (beware of auto-reconnect) """
-		user = self.server.get_user(nick)
+		user = self.core.users.get_user(nick)
 		if not user:
 			raise IrcMsgException(oper, "No such nick '%s'" % nick)
-		self.server.kill_user(user, "killed by %s" % oper.nick)
+		self.core.users.kill_user(user, "killed by %s" % oper.nick)
 
 	def cmd_reset_pass(self, oper, cmd, nick, newpass):
 		""" oper
 		3.6 reset pass <nick> <newpass>
 		Reset password for a profile """
-		profile = self.server.find_profile_by_nickname(nick)
+		profile = self.core.profiles.find_profile_by_nickname(nick)
 		if not profile:
 			raise IrcMsgException("No profile found for '%s'" % nick)
 		profile.reset_password(newpass)
@@ -1495,14 +1454,14 @@ class Construct(object):
 		""" oper
 		3.7 rehash
 		re-read profiles/channels/roles from database and update state """
-		self.server.notice_serverops("re-reading database")
-		self.server.rehash()
+		self.core.users.notice_serverops("re-reading database")
+		self.core.rehash()
 
 	def cmd_restart(self, oper, cmd):
 		""" oper
 		3.8 restart
 		Restart the construct. Use with care. """
-		self.server.notice_serverops("%s issued restart, brb" % oper.nick)
+		self.core.users.notice_serverops("%s issued restart, brb" % oper.nick)
 		raise RestartException()
 
 	def extract_channel_from_args(self, user, args):
@@ -1517,12 +1476,13 @@ class Construct(object):
 		if not channame:
 			raise IrcMsgException(user, "No channel specified")
 
-		chan = self.server.get_channel(channame)
+		chan = self.core.channels.get_channel(channame)
 		if not chan:
 			raise IrcMsgException(user, "Unknown channel '%s'" % channame)
 		return (chan, rest)
 
 	def recv(self, caller, msg):
+		assert isinstance(caller, User)
 		msg = msg.strip()
 		try:
 			cmd, args = self.commands.parse_cmdline(msg, caller, forhelp=False)
@@ -1542,33 +1502,11 @@ class Construct(object):
 		self.notice(caller, "OK")
 
 
-def main(configfile, initial_identified):
+def main(configfilename, initial_identified):
 	# FIXME: would like to have the configfile in a similar format as ircd.conf
 	# FIXME: at least some format that allows comments
-	config = json.load(open(configfile))
-	server = Server(config['server'], initial_identified)
+	config = json.load(open(configfilename))
 
-	hand = Handler(server, **config['connect'])
-	hand.connect()
-	try:
-		hand.read_until_server_connect()
-
-		construct = Construct(server, **config['service'])
-		construct.introduce()
-
-		for oper in config.get('opers', []):  # insert initial user into database
-			profile = server.find_profile_by_nickname(oper['nick'])
-			if not profile:
-				profile = server.create_profile(oper['nick'], oper['password'])
-			profile.level = operlevel
-			profile.realname = oper['realname']
-			profile.reset_password(oper['password'])
-			profile.update_db()
-
-		hand.read_all()
-	except RestartException, e:
-		e.identified_users = server.get_identified_users()
-		raise
-	finally:
-		hand.disconnect()
+	core = Core(config, initial_identified)
+	core.run()
 
