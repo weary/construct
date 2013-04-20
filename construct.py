@@ -1,13 +1,9 @@
 #!/usr/bin/python
 
 import argparse
-import logging
-import construct.main
+import construct
 
 if __name__ == "__main__":
-	FORMAT = '#%(message)s'
-	logging.basicConfig(level=logging.INFO, format=FORMAT)
-
 	parser__ = argparse.ArgumentParser(description='(More) secure irc user management')
 	parser__.add_argument('--config', '-c', type=str, help='config file', required=True)
 	args__ = parser__.parse_args()
@@ -15,11 +11,11 @@ if __name__ == "__main__":
 	starting = True
 	initial_identified = []
 	while starting:
-		reload(construct.main)
+		reload(construct)
 		starting = False
 		try:
-			construct.main.main(args__.config, initial_identified)
-		except construct.main.RestartException, e:
+			construct.main(args__.config, initial_identified)
+		except construct.restartexception.RestartException, e:
 			initial_identified = e.identified_users
 			starting = True
 
