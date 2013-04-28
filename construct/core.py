@@ -2,13 +2,13 @@ import logging
 import time
 
 from .avatar import Avatar
-from .database import ConstructDatabase
-from .consts import operlevel
-from .users import UserDB
 from .channels import ChannelDB
+from .consts import operlevel
+from .database import ConstructDatabase
 from .profiles import ProfileDB
 from .restartexception import RestartException
 from .serverhandler import ServerHandler
+from .users import UserDB
 
 
 log = logging.getLogger('core')

@@ -1,6 +1,6 @@
-import logging
 from collections import defaultdict
 from functools import wraps
+import logging
 
 from .consts import operlevel, banrole, allowrole, operrole
 from .serverhandler import IrcMsgException

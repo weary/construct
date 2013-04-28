@@ -1,9 +1,10 @@
-import sqlite3
 import logging
+import sqlite3
 
 from .consts import \
 		registeredlevel, confirmedlevel, operlevel, \
 		banrole, allowrole, operrole
+
 
 def db_to_level(s):
 	return {

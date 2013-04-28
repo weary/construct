@@ -1,8 +1,8 @@
-import logging
-import time
 from collections import defaultdict
 from copy import copy
 from functools import wraps
+import logging
+import time
 
 from .commandcontainer import CommandContainer, ParseException
 from .consts import \

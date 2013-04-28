@@ -1,15 +1,17 @@
-
+from collections import namedtuple
 import logging
 import re
-from collections import namedtuple
 
 from .consts import ConstructLevel, \
 		guestlevel, registeredlevel, confirmedlevel, operlevel
 
+
 log = logging.getLogger('cmdhandling')
+
 
 class ParseException(Exception):
 	pass
+
 
 class ArgumentTerminator(object):
 	def __str__(self):
@@ -20,6 +22,7 @@ class ArgumentTerminator(object):
 		if remainder:
 			raise ParseException("too many arguments")
 		return {}
+
 
 class ArgumentChoice(object):
 	def __init__(self, args):
@@ -81,7 +84,8 @@ class ArgumentOptional(object):
 			out = argumentlist[0].parse(remainder, argumentlist[1:])
 			out[self.sub.keyw] = None
 		return out
-			
+
+
 class ArgumentMultiple(ArgumentSingle):
 	def parse(self, remainder, argumentlist):
 		for l in xrange(len(remainder), -1, -1):
@@ -126,6 +130,7 @@ class Arguments(object):
 ConstructCommand = namedtuple(
 	'ConstructCommand', [
 		'chapter', 'funcname', 'args', 'minauth', 'func', 'shorthelp', 'longhelp'])
+
 
 class CommandContainer(object):
 	def __init__(self):
@@ -236,6 +241,7 @@ class CommandContainer(object):
 			if verbose:
 				out[-1] += ' (' + str(cmd.minauth) + ')'
 		return out
+
 
 if __name__ == "__main__":
 	#from pprint import pprint
