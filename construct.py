@@ -1,7 +1,6 @@
 #!/usr/bin/python
 
 import argparse
-import construct
 
 if __name__ == "__main__":
 	parser__ = argparse.ArgumentParser(description='(More) secure irc user management')
@@ -11,7 +10,7 @@ if __name__ == "__main__":
 	starting = True
 	initial_identified = []
 	while starting:
-		reload(construct)
+		construct = __import__('construct')
 		starting = False
 		try:
 			construct.main(args__.config, initial_identified)
