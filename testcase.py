@@ -73,6 +73,10 @@ class TestUser(object):
 		self.clearlines()
 		self.send(":%s QUIT :%s" % (self.nick, reason))
 
+	def topic(self, channel, newtopic):
+		self.clearlines()
+		self.send(":%s TOPIC %s %s" % (self.nick, channel, newtopic))
+
 	def join(self, channel):
 		self.clearlines()
 		self.send(":%s JOIN %s" % (self.nick, channel))
@@ -198,6 +202,8 @@ if __name__ == "__main__":
 	chanoper.cmd("register #testchan", True)
 	chanoper.wait_for_line(":construct!-@- NOTICE %s :Trying to register a channel" % chanoper.nick)
 	chanoper.cmd("channel register #testchan")
+
+	chanoper.topic("#testchan", "\xd9\x87\xd9\x86\xd8\xa7")
 
 	# no roles/policy/etc, everyone can join
 	guest.join('#testchan')

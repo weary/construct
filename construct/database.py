@@ -83,7 +83,10 @@ class ConstructDatabase(object):
 		r = self.conn.execute(stmt, args)
 		if stmt[0].lower() in "iud":
 			self.conn.commit()
-		return r
+
+		# strip unicode
+		nouni = lambda x: isinstance(x, unicode) and x.encode('utf-8') or x
+		return map(lambda x: map(nouni, x), r)
 
 	def get_channels(self):
 		return [
