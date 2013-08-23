@@ -56,6 +56,12 @@ class Core(object):
 			self.shandler.read_until_server_connect()
 			log.info("server connected")
 
+			# server has told us all current operators/bans, now fix them
+			for chan in self.channels.get_registered_channels():
+				chan.fix_all_users()
+			log.info("initial fix for known channels/users done")
+
+			# ok, lets join in
 			self.avatar.introduce()
 
 			self.shandler.read_all()

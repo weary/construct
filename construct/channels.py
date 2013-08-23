@@ -91,6 +91,9 @@ class ChannelDB(object):
 	def get_all_channels(self):
 		return self.channels.values()
 
+	def get_registered_channels(self):
+		return list(c for c in self.channels.itervalues() if c.registered)
+
 
 class Channel(object):
 	# FIXME: this class should not be case-sensitive
@@ -219,14 +222,12 @@ class Channel(object):
 					user.nick, self.name))
 				self.op_user(user)
 
-	def find_role(self, user, defaultrole=None):
+	def find_role(self, user):
 		assert self.registered
 
-		if defaultrole is None:
-			if self.default_policy_allow == True:
-				defaultrole = allowrole
-			else:
-				defaultrole = banrole
+		defaultrole = banrole
+		if self.default_policy_allow == True:
+			defaultrole = allowrole
 
 		profile = user.profile
 		if not profile:

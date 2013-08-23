@@ -179,9 +179,7 @@ class Avatar(object):
 
 	def rolesline(self, profile):
 		roles = defaultdict(list)
-		for chan in self.core.channels.get_all_channels():
-			if not chan.registered:
-				continue
+		for chan in self.core.channels.get_registered_channels():
 			role = chan.get_role_for_profile(profile)
 			if not role is None:
 				roles[role].append(chan.name)
@@ -439,7 +437,6 @@ class Avatar(object):
 		a channel if both the channel policy and this setting are 'allow' """
 		allow = {"allow":True, "deny":False}[policy]
 
-		# FIXME, this command does not work
 		chan.set_allow_guests(oper, allow)
 		chan.fix_all_users()
 
@@ -520,7 +517,7 @@ class Avatar(object):
 		profile.unconfirm()
 
 		user = self.core.users.get_user(nick)
-		if user:
+		if user:  # this shouln'd change anything
 			self.core.channels.fix_user_on_all_channels(user)
 
 	def cmd_kill(self, oper, cmd, nick):
@@ -547,6 +544,8 @@ class Avatar(object):
 		re-read profiles/channels/roles from database and update state """
 		self.core.users.notice_serverops("re-reading database")
 		self.core.rehash()
+		for chan in self.core.channels.get_registered_channels():
+			chan.fix_all_users()
 
 	def cmd_restart(self, oper, cmd):
 		""" oper
