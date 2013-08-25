@@ -21,6 +21,7 @@ partre = re.compile(':(\S+) PART (\S+)'.replace(' ', '\s+'))
 kickre = re.compile(':\S+ KICK (\S+) (\S+) :(.*)'.replace(' ', '\s+'))
 #modere = re.compile(":\S+ MODE .*".replace(' ', '\s+'))
 usermodere = re.compile(':(\S+) MODE (\S+) ([-+]\S+) (\S+(?: \S+)*)'.replace(' ', '\s+'))
+serverusermodere = re.compile(':\S+ MODE (\S+) :([-+]\S+)'.replace(' ', '\s+'))
 chanmodere = re.compile(':(\S+) MODE (\S+) ([-+]\S+)'.replace(' ', '\s+'))
 quitre = re.compile(":(\S+) QUIT :(.*)".replace(' ', '\s+'))
 privmsgre = re.compile(":(\S+) PRIVMSG (\S+) :(.*)".replace(' ', '\s+'))
@@ -77,6 +78,7 @@ class ServerHandler(object):
 				(partre, self.msg_part),
 				(kickre, self.msg_kick),
 				(usermodere, self.msg_usermode),
+				(serverusermodere, self.msg_serverusermode),
 				(chanmodere, lambda x, y, z: 1),
 				(quitre, self.msg_quit),
 				(privmsgre, self.msg_privmsg),
@@ -190,6 +192,11 @@ class ServerHandler(object):
 			chan.mode(chanoper, user, modechange)
 		chan.fix_all_users()
 
+	def msg_serverusermode(self, user, modechange):
+		self.core.users.privmsg_serverops(
+				"Global mode-change for user %s: %s" % (
+					user, modechange))
+
 	def msg_quit(self, who, reason):
 		user = self.core.users.get_user(who)
 		self.core.channels.channel_user_quit(user)
@@ -197,11 +204,12 @@ class ServerHandler(object):
 
 	def msg_privmsg(self, fromnick, tonick, msg):
 		avatar = self.core.avatar
-		if tonick == avatar.nick:
-			user = self.core.users.get_user(fromnick)
+		longavatar = avatar.nick + '@' + self.name
+		user = self.core.users.get_user(fromnick)
+		if tonick in (avatar.nick, longavatar):
 			avatar.recv(user, msg)
 		else:
-			raise IrcMsgException(fromnick, "No such nick, '%s'" % tonick)
+			raise IrcMsgException(user, "No such nick, '%s'" % tonick)
 
 	def parse_line(self, line):
 		try:

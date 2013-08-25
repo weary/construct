@@ -17,7 +17,3 @@ if __name__ == "__main__":
 		except construct.restartexception.RestartException, e:
 			initial_identified = e.identified_users
 			starting = True
-
-
-
-
