@@ -20,9 +20,12 @@ sjoinre = re.compile(':\S+ SJOIN \d+ (#\S+) \+[a-z]* :(.*)'.replace(' ', '\s+'))
 partre = re.compile(':(\S+) PART (\S+)'.replace(' ', '\s+'))
 kickre = re.compile(':\S+ KICK (\S+) (\S+) :(.*)'.replace(' ', '\s+'))
 #modere = re.compile(":\S+ MODE .*".replace(' ', '\s+'))
-modere = re.compile(':(\S+) MODE (\S+) ([-+]\S+) (\S+(?: \S+)*)'.replace(' ', '\s+'))
+usermodere = re.compile(':(\S+) MODE (\S+) ([-+]\S+) (\S+(?: \S+)*)'.replace(' ', '\s+'))
+chanmodere = re.compile(':(\S+) MODE (\S+) ([-+]\S+)'.replace(' ', '\s+'))
 quitre = re.compile(":(\S+) QUIT :(.*)".replace(' ', '\s+'))
 privmsgre = re.compile(":(\S+) PRIVMSG (\S+) :(.*)".replace(' ', '\s+'))
+topicre = re.compile(":(\S+) TOPIC (\S+) (.*)".replace(' ', '\s+'))
+awayre = re.compile(":(\S+) AWAY(.*)".replace(' ', '\s+'))
 
 
 class IrcMsgException(Exception):
@@ -73,9 +76,12 @@ class ServerHandler(object):
 				(sjoinre, self.msg_sjoin),
 				(partre, self.msg_part),
 				(kickre, self.msg_kick),
-				(modere, self.msg_mode),
+				(usermodere, self.msg_usermode),
+				(chanmodere, lambda x, y, z: 1),
 				(quitre, self.msg_quit),
-				(privmsgre, self.msg_privmsg)
+				(privmsgre, self.msg_privmsg),
+				(topicre, lambda x, y, z: 1),
+				(awayre, lambda x, y: 1)
 				)
 
 	def send(self, msg):
@@ -168,7 +174,7 @@ class ServerHandler(object):
 					"parting user %s does not exist" % nick)
 		chan.kick(user)
 
-	def msg_mode(self, chanoper, channame, modechange, nicks):
+	def msg_usermode(self, chanoper, channame, modechange, nicks):
 		chan = self.core.channels.get_channel(channame)
 		if not chan:
 			raise OperMsgException(

@@ -73,25 +73,30 @@ class TestUser(object):
 		self.clearlines()
 		self.send(":%s QUIT :%s" % (self.nick, reason))
 
-	def topic(self, channel, newtopic):
+	def sendcmd(self, cmd):
 		self.clearlines()
-		self.send(":%s TOPIC %s %s" % (self.nick, channel, newtopic))
+		self.send(":%s %s" % (self.nick, cmd))
+
+	def topic(self, channel, newtopic):
+		self.sendcmd("TOPIC %s %s" % (channel, newtopic))
 
 	def join(self, channel):
-		self.clearlines()
-		self.send(":%s JOIN %s" % (self.nick, channel))
+		self.sendcmd("JOIN %s" % channel)
 		self.wait_for_line(":%s!%s@127.0.0.1 JOIN :%s" % (
 			self.nick, self.username, channel))
 
 	def part(self, channel):
-		self.clearlines()
-		self.send(":%s PART %s" % (self.nick, channel))
+		self.sendcmd("PART %s" % channel)
 
 	def kick(self, channel, who):
-		self.clearlines()
-		self.send(":%s KICK %s :%s" % (self.nick, channel, who))
+		self.sendcmd("KICK %s :%s" % (channel, who))
 
-	def mode(self, channel, who, modechange):
+	def chanmode(self, channel, modechange):
+		self.sendcmd("MODE %s %s" % (channel, modechange))
+		self.wait_for_line(":%s!%s@127.0.0.1 MODE %s %s" % (
+			self.nick, self.username, channel, modechange))
+
+	def usermode(self, channel, who, modechange):
 		self.clearlines()
 		self.send("MODE %s %s %s" % (channel, modechange, who))
 
@@ -109,8 +114,7 @@ class TestUser(object):
 			self.wait_for_line(prefix)
 
 	def names(self, channel):
-		self.clearlines()
-		self.send(":%s NAMES %s" % (self.nick, channel))
+		self.sendcmd("NAMES %s" % channel)
 		prefix = ":sin 353 %s = %s :" % (self.nick, channel)
 		result = self.wait_for_line(prefix)
 		result = set(result[len(prefix):].split(' '))
@@ -203,7 +207,11 @@ if __name__ == "__main__":
 	chanoper.wait_for_line(":construct!-@- NOTICE %s :Trying to register a channel" % chanoper.nick)
 	chanoper.cmd("channel register #testchan")
 
+	# this used to give an exception in sending unicode to the serveroper
 	chanoper.topic("#testchan", "\xd9\x87\xd9\x86\xd8\xa7")
+	chanoper.chanmode("#testchan", "+pisnt")
+	chanoper.chanmode("#testchan", "-pisnt")
+	# should make sure serveroper doesn't receive anything from that, but hard to test
 
 	# no roles/policy/etc, everyone can join
 	guest.join('#testchan')
@@ -215,12 +223,12 @@ if __name__ == "__main__":
 	assert chanoper.names('#testchan') == set(
 			['gUest', 'aLlowed', 'bAnned', '@cHanoper'])
 
-	chanoper.mode("#testchan", allowed.nick, "+o")
+	chanoper.usermode("#testchan", allowed.nick, "+o")
 	allowed.wait_for_line(":cHanoper!chanoper2@127.0.0.1 MODE #testchan +o aLlowed")
 	chanoper.cmd("channel roles #testchan", True)
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :- aLlowed oper")
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :total 2 role(s) defined for #testchan")
-	chanoper.mode("#testchan", allowed.nick, "-o")
+	chanoper.usermode("#testchan", allowed.nick, "-o")
 	allowed.wait_for_line(":cHanoper!chanoper2@127.0.0.1 MODE #testchan -o aLlowed")
 	chanoper.cmd("channel roles #testchan", True)
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :total 1 role(s) defined for #testchan")
