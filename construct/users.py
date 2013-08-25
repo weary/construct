@@ -12,8 +12,10 @@ class UserDB(object):
 		self.users = list()
 
 	def get_user(self, needednick, defaultval=None):
-		#print "looking for user '%s', current users: %s" % (
-		#		needednick, ', '.join(u.nick for u in self.users))
+		# irc supports sending messages to users on specific networks. we
+		# don't
+		needednick = needednick.split('@')[0]
+
 		needednick = needednick.lower()
 		for user in self.users:
 			if user.nick.lower() == needednick:

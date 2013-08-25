@@ -106,9 +106,12 @@ class TestUser(object):
 			#	print >>self.out, "throwing out:", line
 			self.lines = []
 
-	def cmd(self, cmd, ignore_result=False):
+	def cmd(self, cmd, ignore_result=False, specify_server=False):
 		self.clearlines()
-		self.send(":%s PRIVMSG construct :%s" % (self.nick, cmd))
+		to = "construct"
+		if specify_server:
+			to += "@test.local"
+		self.send(":%s PRIVMSG %s :%s" % (self.nick, to, cmd))
 		if not ignore_result:
 			prefix = ":construct!-@- NOTICE %s :OK" % self.nick
 			self.wait_for_line(prefix)
@@ -181,6 +184,7 @@ if __name__ == "__main__":
 	chanoper.cmd("register chanoperpass")
 	serveroper.cmd("confirm %s Channel -Confirmed- Operator chanoper@someemail" % chanoper.nick)
 	chanoper.cmd("whoami")
+	chanoper.cmd("whoami", specify_server=True)
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :You are cHanoper, confirmed, no defined roles")
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Real name: Channel -Confirmed- Operator")
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :Email: chanoper@someemail")
