@@ -232,8 +232,8 @@ if __name__ == "__main__":
 	chanoper.cmd("channel roles #testchan", True)
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :- aLlowed oper")
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :total 2 role(s) defined for #testchan")
-	chanoper.usermode("#testchan", allowed.nick, "-o")
-	allowed.wait_for_line(":cHanoper!chanoper2@127.0.0.1 MODE #testchan -o aLlowed")
+	chanoper.usermode("#testchan", allowed.nick, "+m-o")
+	allowed.wait_for_line(":cHanoper!chanoper2@127.0.0.1 MODE #testchan +m-o aLlowed")
 	chanoper.cmd("channel roles #testchan", True)
 	chanoper.wait_for_line(":construct!-@- NOTICE cHanoper :total 1 role(s) defined for #testchan")
 

@@ -293,22 +293,28 @@ class Channel(object):
 			self.parent.channel_empty(self)
 
 	def mode(self, whodidit, user, modechange):
-		oldmode = self.users[user]
-		if modechange[0] == '-':
-			newmode = ''.join(set(oldmode) - set(modechange[1:]))
-		elif modechange[0] == '+':
-			newmode = ''.join(set(oldmode).union(set(modechange[1:])))
-		else:
-			raise Exception("Invalid mode-change '%s' for %s on %s" %(
-				modechange, user.nick, self.name))
-		self.users[user] = newmode
+		usermode = set(self.users[user])
+		direction = None
+		for c in modechange:
+			if c in "-+":
+				direction = c
+				continue
+			if direction == '+':
+				usermode.add(c)
+			elif direction == '-':
+				usermode.remove(c)
+			else:
+				raise Exception("Invalid mode-pattern '%s' for %s on %s" %
+						(modechange, user.nick, self.name))
+		self.users[user] = ''.join(usermode)
+		isoper = 'o' in usermode
 
 		try:
 			if whodidit and 'o' in modechange and self.registered:
 				if self.is_channel_operator(whodidit) and user.profile:
-					if modechange[0] == '+':
+					if isoper and not self.is_channel_operator(user):
 						self.set_role(whodidit, user.profile, operrole)
-					elif modechange[0] == '-' and self.is_channel_operator(user):
+					elif not isoper and self.is_channel_operator(user):
 						if self.default_policy_allow:
 							self.set_role(whodidit, user.profile, None)
 						else:
