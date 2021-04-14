@@ -39,7 +39,7 @@ class IrcConnection(object):
     def __iter__(self):
         return self
 
-    def next(self):
+    def __next__(self):
         while len(self.readlinecache) < 2:
             newdata = self.socket.recv(100)
             data = newdata

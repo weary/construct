@@ -88,7 +88,7 @@ class ArgumentOptional(object):
 
 class ArgumentMultiple(ArgumentSingle):
     def parse(self, remainder, argumentlist):
-        for l in xrange(len(remainder), -1, -1):
+        for l in range(len(remainder), -1, -1):
             try:
                 cur = remainder[:l]
                 out = argumentlist[0].parse(remainder[l:], argumentlist[1:])
@@ -119,7 +119,7 @@ class Arguments(object):
     def parse(self, argstringlist):
         try:
             return self.args[0].parse(argstringlist, self.args[1:])
-        except ParseException, e:
+        except ParseException as e:
             if len(self.args) > 1:
                 raise ParseException(str(e) + ", expected " + str(self))
             else:
@@ -250,7 +250,7 @@ if __name__ == "__main__":
     #from pprint import pprint
 
     a = Arguments("<arg1> [<arg2>] arg3=locked [<arg4>]")
-    print str(a)
+    print(str(a))
     assert a.parse("val1 locked val4".split()) == \
         {'arg1': 'val1', 'arg2': None, 'arg3': 'locked', 'arg4': 'val4'}
     options = 'option1|option2|option3'
@@ -301,7 +301,7 @@ if __name__ == "__main__":
     assert cmd.func(**args)
     cmd, args = cc.parse_cmdline("m g f", user=None)
     assert cmd.func(**args)
-    print
+    print()
 
     class DummyUser(object):
         def __init__(self, l):
@@ -311,11 +311,11 @@ if __name__ == "__main__":
             return self.l
 
     for lvl in (guestlevel, registeredlevel, confirmedlevel, operlevel):
-        print "XXXXXXXXXXXXXXXXX", str(lvl)
+        print("XXXXXXXXXXXXXXXXX", str(lvl))
         for line in cc.get_helplist(user=DummyUser(lvl), verbose=True):
-            print line
+            print(line)
 
-    print "XXXXXXXXXXXXXXXXX"
+    print("XXXXXXXXXXXXXXXXX")
     for line in cc.get_helplist(user=cc.chanoper, verbose=False):
-        print line
-    print "XXXXXXXXXXXXXXXXX"
+        print(line)
+    print("XXXXXXXXXXXXXXXXX")

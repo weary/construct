@@ -7,10 +7,10 @@ from .core import Core
 def no_unicode(c):
     """ encode all unicode in a dict/list combo """
     if isinstance(c, dict):
-        return {no_unicode(k): no_unicode(v) for k, v in c.iteritems()}
+        return {no_unicode(k): no_unicode(v) for k, v in c.items()}
     elif isinstance(c, list):
         return [no_unicode(k) for k in c]
-    elif isinstance(c, unicode):
+    elif isinstance(c, str):
         return c.encode('utf-8')
     else:
         return c

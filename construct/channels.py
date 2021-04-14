@@ -41,7 +41,7 @@ class ChannelDB(object):
             self.channels[name] = chan
 
         # other channels are not registered
-        for name, chan in old.iteritems():
+        for name, chan in old.items():
             if chan.registered:
                 log.info("Rehash: channel %s is no longer registered" % name)
                 chan.registered = False
@@ -69,7 +69,7 @@ class ChannelDB(object):
 
     def get_channels_with_user(self, user):
         return [
-            chan for chan in self.channels.values()
+            chan for chan in list(self.channels.values())
             if chan.has_user(user)]
 
     def channel_empty(self, channel):
@@ -89,10 +89,10 @@ class ChannelDB(object):
                 chan.fix_user_to_role(user)
 
     def get_all_channels(self):
-        return self.channels.values()
+        return list(self.channels.values())
 
     def get_registered_channels(self):
-        return list(c for c in self.channels.itervalues() if c.registered)
+        return list(c for c in self.channels.values() if c.registered)
 
 
 class Channel(object):
@@ -168,7 +168,7 @@ class Channel(object):
     @channel_registered
     def get_roles(self, oper):
         out = []
-        for profileid, role in self.roles.iteritems():
+        for profileid, role in self.roles.items():
             profile = self.parent.core.profiles.find_profile_by_id(profileid)
             if not profile:
                 raise Exception("self.roles broken in channel %s" % self.name)

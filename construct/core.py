@@ -66,7 +66,7 @@ class Core(object):
             self.avatar.introduce()
 
             self.shandler.read_all()
-        except RestartException, e:
+        except RestartException as e:
             e.identified_users = self.users.get_identified_users()
             raise
         finally:

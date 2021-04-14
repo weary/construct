@@ -92,7 +92,7 @@ class ServerHandler(object):
         )
 
     def send(self, msg):
-        print >>self.con, msg
+        print(msg, file=self.con)
 
     def connect(self):
         self.con.connect()
@@ -226,12 +226,12 @@ class ServerHandler(object):
             raise OperMsgException("Unparsed line: %s" % line)
         except RestartException:
             raise  # pass upwards
-        except IrcMsgException, e:
+        except IrcMsgException as e:
             if e.user:
                 self.core.avatar.notice(e.user, e.msg)
             else:
                 log.warning("Unknown user caused exception: %s" % e.msg)
-        except OperMsgException, e:
+        except OperMsgException as e:
             log.warning(e.msg)
             self.core.users.privmsg_serverops(
                 "Exception: %s" % e.msg)

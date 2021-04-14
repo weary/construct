@@ -88,8 +88,8 @@ class ConstructDatabase(object):
             self.conn.commit()
 
         # strip unicode
-        def nouni(x): return isinstance(x, unicode) and x.encode('utf-8') or x
-        return map(lambda x: map(nouni, x), r)
+        def nouni(x): return isinstance(x, str) and x.encode('utf-8') or x
+        return [list(map(nouni, x)) for x in r]
 
     def get_channels(self):
         return [

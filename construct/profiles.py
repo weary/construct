@@ -36,7 +36,7 @@ class ProfileDB(object):
             self.profiles.append(prof)
 
         # any profiles lost from database?
-        for prof in old.itervalues():
+        for prof in old.values():
             log.info("Rehash: removed profile %s" % prof.register_nick)
             user = self.core.users.get_user_for_profile(prof)
             if user:

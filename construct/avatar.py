@@ -63,12 +63,12 @@ class Avatar(object):
 
         # find commands and documentation
         self.commands = CommandContainer()
-        for funcname, func in self.__class__.__dict__.iteritems():
+        for funcname, func in self.__class__.__dict__.items():
             if funcname.startswith("cmd_"):
                 funcname = funcname[4:].replace('_', ' ')
                 try:
                     self.commands.register_command(funcname, func)
-                except Exception, e:
+                except Exception as e:
                     log.warn("Ignoring command '%s', %s" % (funcname, e))
         self.commands.register_chapter(1, "general commands")
         self.commands.register_chapter(2, "channel commands")
@@ -195,7 +195,7 @@ class Avatar(object):
         if roles:
             roles = make_list(
                 (role_as_text(role) + " in " + make_list(sort(channels), "and")
-                 for role, channels in roles.iteritems()), "and")
+                 for role, channels in roles.items()), "and")
         else:
             roles = "no defined roles on channels"
         return roles
@@ -375,9 +375,9 @@ class Avatar(object):
             else:
                 for line in self.commands.get_helplist(caller, bool(verbose)):
                     self.notice(caller, line.strip())
-        except ParseException, e:
+        except ParseException as e:
             raise IrcMsgException(caller, str(e))
-        except Exception, e:
+        except Exception as e:
             import traceback
             traceback.print_exc()
             raise IrcMsgException(caller, str(e))
@@ -578,17 +578,17 @@ class Avatar(object):
         msg = msg.strip()
         try:
             cmd, args = self.commands.parse_cmdline(msg, caller, forhelp=False)
-        except ParseException, e:
+        except ParseException as e:
             raise IrcMsgException(caller, "syntax error, " + str(e))
         except IrcMsgException:
             raise
-        except Exception, e:
+        except Exception as e:
             log.info("%s failed command %s: %s" % (caller.nick, msg, e))
             self.notice(caller, "internal error")
             raise
 
         log.debug("%s used command %s(%s)" % (caller.nick, cmd.funcname,
-                                              ', '.join("%s=%s" % tup for tup in args.iteritems())))
+                                              ', '.join("%s=%s" % tup for tup in args.items())))
 
         cmd.func(self, caller, cmd, **args)
         self.notice(caller, "OK")
