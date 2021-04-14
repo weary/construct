@@ -15,26 +15,28 @@ class IrcConnection(object):
 
     def connect(self):
         # FIXME: allow ssl
-        self.socket = socket.create_connection(
-            (self.host, self.port))
+        self.socket = socket.create_connection((self.host, self.port))
 
     def disconnect(self):
         self.socket.close()
         self.socket = None
 
     def write(self, line):
+        assert isinstance(line, str)
+        print("XXXXX write %r" % line)
+        line = line.encode("utf-8", "replace")
         lines = line
         if self.writelinecache:
             lines = self.writelinecache + line
             self.writelinecache = None
 
-        lines = lines.split('\n')
+        lines = lines.split(b'\n')
         self.writelinecache = lines[-1]
         lines = lines[:-1]
 
-        for l in lines:
-            log.debug("w: %s" % l)
-            self.socket.send(l + '\r\n')
+        for line in lines:
+            log.debug("w: %s" % line.decode("utf-8", "replace"))
+            self.socket.send(line + b'\r\n')
 
     def __iter__(self):
         return self
@@ -46,7 +48,7 @@ class IrcConnection(object):
             if self.readlinecache:
                 data = self.readlinecache[0] + newdata
 
-            self.readlinecache = data.split('\n')
+            self.readlinecache = data.split(b'\n')
 
             if newdata == '':
                 self.readlinecache.append(None)
@@ -54,7 +56,8 @@ class IrcConnection(object):
 
         r = self.readlinecache[0]
         del self.readlinecache[0]
-        if r == None:
+        if r is None:
             raise StopIteration()
+        r = r.decode("utf-8", "replace")
         log.debug("r: %s" % r)
         return r

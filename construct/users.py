@@ -11,31 +11,42 @@ class UserDB(object):
         self.core = core
         self.users = list()
 
-    def get_user(self, needednick, defaultval=None):
+    def get_user_by_uid(self, needed_uid, defaultval=None):
+        print("XXXXX needed_uid = %r" % needed_uid)
+        assert needed_uid.startswith("0")
+        for user in self.users:
+            if user.uid == needed_uid:
+                return user
+        return defaultval
+
+    def get_user_by_nick_yes_really(self, needednick, defaultval=None):
         # irc supports sending messages to users on specific networks. we
         # don't
-        needednick = needednick.split('@')[0]
+        needednick = needednick.split("@")[0]
 
         needednick = needednick.lower()
         for user in self.users:
+            print("%r == %r" % (user.nick, needednick))
             if user.nick.lower() == needednick:
                 return user
         return defaultval
 
-    def create_user(self, newnick, username, hostname):
-        assert self.get_user(newnick) is None
-        user = User(newnick, username, hostname)
+    def create_user(self, newnick, username, uid):
+        assert self.get_user_by_uid(uid) is None
+        user = User(newnick, username, uid)
         self.users.append(user)
         register_nick = self.core.can_auto_identify(newnick)
-        if not register_nick is None:
-            log.info("startup: user '%s' automatically identified with profile '%s'" % (
-                newnick, register_nick))
+        if register_nick is not None:
+            log.info(
+                "startup: user '%s' automatically identified with profile '%s'"
+                % (newnick, register_nick))
             profile = self.core.profiles.find_profile_by_nickname(
                 register_nick)
             user.identify(profile)
         return user
 
     def remove_user(self, user):
+        assert isinstance(user, User)
         self.users.remove(user)
 
     def get_serveropers(self):
@@ -63,13 +74,15 @@ class UserDB(object):
         return [
             (user.nick, user.profile.register_nick)
             for user in self.users
-            if user.profile]
+            if user.profile
+        ]
 
     def privmsg_serverops(self, msg):
         for user in self.get_serveropers():
             self.core.avatar.privmsg(user, msg)
 
     def notice_serverops(self, msg):
+        log.info("notice_serverops: %s", msg)
         for user in self.get_serveropers():
             self.core.avatar.notice(user, msg)
 
@@ -80,11 +93,14 @@ class UserDB(object):
 
 
 class User(object):
-    def __init__(self, nick, username, hostname):
+    def __init__(self, nick, username, uid):
+        assert isinstance(nick, str)
+        assert isinstance(username, str)
+        assert isinstance(uid, str)
         self.nick = nick
         self.profile = None
         self.username = username
-        self.hostname = hostname
+        self.uid = uid
 
     def nickchange(self, newnick):
         log.debug("%s nickchanged to %s" % (self.nick, newnick))

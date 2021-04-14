@@ -23,6 +23,7 @@ class Core(object):
             conf['connect']['host'],
             conf['connect']['port'],
             conf['server']['name'],
+            conf['server'].get('serverid', '0CO'),
             conf['server'].get('description', ''))
         self.channels = ChannelDB(self)
         self.profiles = ProfileDB(self)
@@ -46,7 +47,8 @@ class Core(object):
                     oper['nick'], oper['password'])
             profile.level = operlevel
             profile.realname = oper.get('realname', '')
-            profile.reset_password(oper['password'])
+            password = oper['password']
+            profile.reset_password(password)
             profile.update_db()
 
     def run(self):

@@ -1,43 +1,45 @@
 import logging
 import sqlite3
 
-from .consts import \
-    registeredlevel, confirmedlevel, operlevel, \
-    banrole, allowrole, operrole
+from .consts import (
+    registeredlevel,
+    confirmedlevel,
+    operlevel,
+    banrole,
+    allowrole,
+    operrole)
 
 
 def db_to_level(s):
     return {
         'registered': registeredlevel,
         'confirmed': confirmedlevel,
-        'oper': operlevel}[s]
+        'oper': operlevel,
+    }[s]
 
 
 def level_to_db(s):
     return {
         registeredlevel: 'registered',
         confirmedlevel: 'confirmed',
-        operlevel: 'oper'}[s]
+        operlevel: 'oper'
+    }[s]
 
 
 def db_to_role(s):
-    return {
-        'ban': banrole,
-        'allow': allowrole,
-        'chanoper': operrole}[s]
+    return {'ban': banrole, 'allow': allowrole, 'chanoper': operrole}[s]
 
 
 def role_to_db(s):
-    return {
-        banrole: 'ban',
-        allowrole: 'allow',
-        operrole: 'chanoper'}[s]
+    return {banrole: 'ban', allowrole: 'allow', operrole: 'chanoper'}[s]
 
 
 log = logging.getLogger('db')
 
 schema = (
-    ('profiles', """CREATE TABLE profiles (
+    (
+        'profiles',
+        """CREATE TABLE profiles (
         id INTEGER NOT NULL,
         register_nick VARCHAR NOT NULL,
         level VARCHAR(10) NOT NULL,
@@ -46,31 +48,32 @@ schema = (
         email VARCHAR,
         PRIMARY KEY (id),
         UNIQUE (register_nick),
-        CHECK (level IN ('registered', 'confirmed', 'oper'))
-)"""),
-    ('channels', """CREATE TABLE channels (
+        CHECK (level IN ('registered', 'confirmed', 'oper')))""",),
+    (
+        'channels',
+        """CREATE TABLE channels (
         name VARCHAR NOT NULL,
         allow_guests BOOLEAN NOT NULL,
         policy VARCHAR(5) NOT NULL,
         PRIMARY KEY (name),
         CHECK (allow_guests IN (0, 1)),
-        CHECK (policy IN ('allow', 'deny'))
-)"""),
-    ('roles', """CREATE TABLE roles (
+        CHECK (policy IN ('allow', 'deny')))""",),
+    (
+        'roles',
+        """CREATE TABLE roles (
         profile INTEGER NOT NULL,
         channel VARCHAR NOT NULL,
         type VARCHAR(8) NOT NULL,
         PRIMARY KEY (profile, channel),
         FOREIGN KEY(profile) REFERENCES profiles (id) ON DELETE CASCADE,
         FOREIGN KEY(channel) REFERENCES channels (name) ON DELETE CASCADE,
-        CHECK (type IN ('ban', 'allow', 'chanoper'))
-)"""))
+        CHECK (type IN ('ban', 'allow', 'chanoper')))""",))
 
 
 class ConstructDatabase(object):
     def __init__(self, filename):
         self.conn = sqlite3.connect(filename)
-        self.conn.execute('pragma foreign_keys=ON')
+        self.conn.execute("pragma foreign_keys=ON")
         self.conn.commit()
 
         for tablename, tschema in schema:
@@ -87,48 +90,61 @@ class ConstructDatabase(object):
         if stmt[0].lower() in "iud":
             self.conn.commit()
 
-        # strip unicode
-        def nouni(x): return isinstance(x, str) and x.encode('utf-8') or x
-        return [list(map(nouni, x)) for x in r]
+        return r
 
     def get_channels(self):
         return [
             (row[0], row[1] != 0, row[2] == 'allow')
-            for row in self.qry(
-                "select name, allow_guests, policy from channels")]
+            for row in self.qry("select name, allow_guests, policy from channels")
+        ]
 
     def create_channel(self, name, allow_guests, default_policy_allow):
-        self.qry("insert into channels values(?, ?, ?)", (
-            name,
-            allow_guests and 1 or 0,
-            default_policy_allow and "allow" or "deny"))
+        self.qry(
+            "insert into channels values(?, ?, ?)",
+            (name, allow_guests and 1 or 0,
+             default_policy_allow and "allow" or "deny"))
 
     def update_channel(self, name, allow_guests, default_policy_allow):
-        self.qry("update channels set allow_guests=?, policy=? where name=?", (
-            allow_guests and 1 or 0,
-            default_policy_allow and "allow" or "deny",
-            name))
+        self.qry(
+            "update channels set allow_guests=?, policy=? where name=?",
+            (allow_guests and 1 or 0, default_policy_allow and "allow" or "deny", name))
 
     def delete_channel(self, name):
         self.qry("delete from channels where name=?", (name,))
 
     def get_profiles(self):
+        def to_ascii(x):
+            """for some reason passwords are sametimes 'str' and
+            sometimes 'bytes'"""
+            if type(x) == bytes:
+                return x.decode("utf-8", "replace")
+            return x
+
         return [
-            (row[0], row[1], db_to_level(row[2]), row[3], row[4], row[5])
+            (
+                row[0],
+                row[1],
+                db_to_level(row[2]),
+                to_ascii(row[3]),  # password
+                row[4],
+                row[5])
             for row in self.qry(
-                "select id, register_nick, level, password, realname, email " +
-                "from profiles")]
+                "select id, register_nick, level, password, realname, email "
+                + "from profiles")
+        ]
 
     def create_profile(self, id_, nick, level, pwd):
-        self.qry("insert into profiles(id, register_nick, level, password) " +
-                 "values(?, ?, ?, ?)", (
-                     id_, nick, level_to_db(level), pwd))
+        self.qry(
+            "insert into profiles(id, register_nick, level, password) "
+            + "values(?, ?, ?, ?)",
+            (id_, nick, level_to_db(level), pwd),)
 
     def update_profile(self, id_, nick, level, pwd, name, email):
-        self.qry("update profiles set " +
-                 "register_nick=?, level=?, password=?, realname=?, email=? " +
-                 "where id=?", (
-                     nick, level_to_db(level), pwd, name, email, id_))
+        self.qry(
+            "update profiles set "
+            + "register_nick=?, level=?, password=?, realname=?, email=? "
+            + "where id=?",
+            (nick, level_to_db(level), pwd, name, email, id_),)
 
     def delete_profile(self, id_):
         self.qry("delete from profiles where id=?", (id_,))
@@ -136,12 +152,13 @@ class ConstructDatabase(object):
     def get_roles(self):
         return [
             (row[0], row[1], db_to_role(row[2]))
-            for row in self.qry(
-                "select channel, profile, type from roles")]
+            for row in self.qry("select channel, profile, type from roles")
+        ]
 
     def create_role(self, channel, profile, roletype):
-        self.qry("insert or replace into roles(channel, profile, type) values(?, ?, ?)", (
-            (channel, profile, role_to_db(roletype))))
+        self.qry(
+            "insert or replace into roles(channel, profile, type) values(?, ?, ?)",
+            ((channel, profile, role_to_db(roletype))))
 
     def delete_role(self, channel, profile):
         self.qry("delete from roles where channel=? and profile=?",

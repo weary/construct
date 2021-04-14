@@ -59,6 +59,7 @@ class ProfileDB(object):
         return None
 
     def create_profile(self, nickname, password):
+        assert isinstance(password, str)
         id_ = self.next_id
         self.next_id += 1
         p = Profile(self, id_, nickname, password)
@@ -68,8 +69,7 @@ class ProfileDB(object):
         return p
 
     def drop_profile(self, profile):
-        self.profiles = [p for p in self.profiles
-                         if p != profile]
+        self.profiles = [p for p in self.profiles if p != profile]
         self.core.db.delete_profile(profile.profileid)
 
     def get_all_profiles(self):
@@ -86,6 +86,7 @@ class Profile(object):
         self.last_password_failed_time = 0
         self.realname = None
         self.email = None
+        assert isinstance(password, str)
         if password[:3] == '$C$':
             self.password = password
         else:
@@ -96,14 +97,32 @@ class Profile(object):
     @staticmethod
     def getDigest(password, salt=None):
         if not salt:
-            salt = base64.b64encode(os.urandom(32))
-        digest = hashlib.sha256(salt + password).hexdigest()
+            salt = base64.b64encode(os.urandom(32)).decode("utf-8")
+        assert isinstance(salt, str)
+        assert isinstance(password, str)
+        if not salt.isascii() or not password.isascii():
+            raise Exception("salt and password must be ascii")
+
+        saltbytes = salt.encode("utf-8", "replace")
+        password = password.encode("utf-8", "replace")
+
+        digest = hashlib.sha256(saltbytes + password).hexdigest()
         for x in range(0, 100001):
+            # yes, we re-hash the hex-encoded value. Leaving this bug to keep
+            # old passwords valid
+            assert digest.isascii()
+            digest = digest.encode("utf-8")
             digest = hashlib.sha256(digest).hexdigest()
+
+        assert isinstance(salt, str)
+        assert isinstance(digest, str)
         return salt, digest
 
     def test_password(self, testpass, caller, msg=None):
         """ will throw on invalid password """
+        assert isinstance(testpass, str)
+        if not testpass.isascii():
+            raise IrcMsgException(caller, "password must be ascii")
         now = time.time()
         timeout = self.parent.core.password_timeout
         if now - self.last_password_failed_time < timeout:
@@ -119,14 +138,16 @@ class Profile(object):
             raise IrcMsgException(caller, msg)
 
     def reset_password(self, newpass):
-        if newpass[:3] != '$C$':
-            newpass = '$C$' + '$'.join(Profile.getDigest(newpass))
+        assert isinstance(newpass, str)
+        if newpass[:3] != "$C$":
+            salt, hexdigest = Profile.getDigest(newpass)
+            newpass = "$C$" + salt + "$" + hexdigest
         if newpass != self.password:
             self.password = newpass
             self.update_db()
 
     def confirm(self, realname, email):
-        if not self.level is operlevel:
+        if self.level is not operlevel:
             self.level = confirmedlevel
         self.realname = realname
         self.email = email
@@ -143,5 +164,9 @@ class Profile(object):
 
     def update_db(self):
         self.parent.core.db.update_profile(
-            self.profileid, self.register_nick, self.level, self.password,
-            self.realname, self.email)
+            self.profileid,
+            self.register_nick,
+            self.level,
+            self.password,
+            self.realname,
+            self.email)

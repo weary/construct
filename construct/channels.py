@@ -14,8 +14,7 @@ def channel_registered(func):
     def wrapper(self, user, *args):
         if not self.registered:
             raise IrcMsgException(
-                user,
-                "Channel %s is not registered" % self.name)
+                user, "Channel %s is not registered" % self.name)
         return func(self, user, *args)
     return wrapper
 
@@ -68,9 +67,7 @@ class ChannelDB(object):
         return channel
 
     def get_channels_with_user(self, user):
-        return [
-            chan for chan in list(self.channels.values())
-            if chan.has_user(user)]
+        return [chan for chan in list(self.channels.values()) if chan.has_user(user)]
 
     def channel_empty(self, channel):
         if not channel.registered:
@@ -145,8 +142,7 @@ class Channel(object):
             self.default_policy_allow = False
         else:
             raise IrcMsgException(
-                oper,
-                "Invalid channel policy '%s'" % newpolicy)
+                oper, "Invalid channel policy '%s'" % newpolicy)
         self.parent.core.db.update_channel(
             self.name, self.allow_guests, self.default_policy_allow)
 
@@ -191,43 +187,47 @@ class Channel(object):
         # allowed and has the right mode. And correct if wrong
 
         if not self.registered:
-            log.debug("not fixing %s on %s, channel not registered" % (
-                user.nick, self.name))
+            log.debug(
+                "not fixing %s on %s, channel not registered" % (
+                    user.nick, self.name))
             return  # not doing anything for channels nobody cares about
 
         if not self.allow_guests and not user.profile:
-            log.debug("removing %s from %s, guests not allowed on channel" % (
-                user.nick, self.name))
+            log.debug(
+                "removing %s from %s, guests not allowed on channel"
+                % (user.nick, self.name))
             self.remove_user(user, "guests not allowed")
             return
 
         role = self.find_role(user)
         mode = self.users.get(user)
         if mode is None:
-            log.debug("not fixing %s on %s, user is not in channel" % (
-                user.nick, self.name))
+            log.debug(
+                "not fixing %s on %s, user is not in channel" % (
+                    user.nick, self.name))
             return
 
         if role is banrole:
-            log.debug("removing %s from %s, user is banned" % (
-                user.nick, self.name))
+            log.debug("removing %s from %s, user is banned" %
+                      (user.nick, self.name))
             self.remove_user(user, "user not allowed")
         elif role is allowrole:
             if 'o' in mode:
-                log.debug("user %s is not operator on %s, fixing" % (
-                    user.nick, self.name))
+                log.debug(
+                    "user %s is not operator on %s, fixing" % (
+                        user.nick, self.name))
                 self.deop_user(user)
         elif role is operrole:
-            if not 'o' in mode:
-                log.debug("user %s is operator on %s, fixing" % (
-                    user.nick, self.name))
+            if 'o' not in mode:
+                log.debug("user %s is operator on %s, fixing" %
+                          (user.nick, self.name))
                 self.op_user(user)
 
     def find_role(self, user):
         assert self.registered
 
         defaultrole = banrole
-        if self.default_policy_allow == True:
+        if self.default_policy_allow:
             defaultrole = allowrole
 
         profile = user.profile
@@ -251,45 +251,52 @@ class Channel(object):
 
     def join(self, user, initial_mode):
         if user in self.users:
-            log.warn("User %s was already joined to channel %s" % (
-                user.nick, self.name))
+            log.warn(
+                "User %s was already joined to channel %s" % (
+                    user.nick, self.name))
             return
         self.users[user] = initial_mode
-        log.debug("%s: %s joined: %s" % (
-            self.name, user.nick, ', '.join(u.nick for u in self.users)))
+        log.debug(
+            "%s: %s joined: %s"
+            % (self.name, user.nick, ', '.join(u.nick for u in self.users)))
 
         self.fix_user_to_role(user)
         # FIXME: tell user he should identify or register
 
     def part(self, user):
-        if not user in self.users:
-            log.warn("User %s parted but was not on channel %s" % (
-                user.nick, self.name))
+        if user not in self.users:
+            log.warn(
+                "User %s parted but was not on channel %s" % (
+                    user.nick, self.name))
             return
 
         del self.users[user]
-        log.debug("%s: %s parted: %s" % (
-            self.name, user.nick, ', '.join(u.nick for u in self.users)))
+        log.debug(
+            "%s: %s parted: %s"
+            % (self.name, user.nick, ', '.join(u.nick for u in self.users)))
         if not self.users:
             self.parent.channel_empty(self)
 
     def kick(self, user):
-        if not user in self.users:
-            log.warn("User %s was kicked but was not on channel %s" % (
-                user.nick, self.name))
+        if user not in self.users:
+            log.warn(
+                "User %s was kicked but was not on channel %s" % (
+                    user.nick, self.name))
             return
 
         del self.users[user]
-        log.debug("%s: %s kicked: %s" % (
-            self.name, user.nick, ', '.join(u.nick for u in self.users)))
+        log.debug(
+            "%s: %s kicked: %s"
+            % (self.name, user.nick, ', '.join(u.nick for u in self.users)))
         if not self.users:
             self.parent.channel_empty(self)
 
     def quit(self, user):
         if user in self.users:
             del self.users[user]
-            log.debug("%s: %s logged out, leftover: %s" % (
-                self.name, user.nick, ', '.join(u.nick for u in self.users)))
+            log.debug(
+                "%s: %s logged out, leftover: %s"
+                % (self.name, user.nick, ', '.join(u.nick for u in self.users)))
         if not self.users:
             self.parent.channel_empty(self)
 
@@ -305,8 +312,9 @@ class Channel(object):
             elif direction == '-':
                 usermode.remove(c)
             else:
-                raise Exception("Invalid mode-pattern '%s' for %s on %s" %
-                                (modechange, user.nick, self.name))
+                raise Exception(
+                    "Invalid mode-pattern '%s' for %s on %s"
+                    % (modechange, user.nick, self.name))
         self.users[user] = ''.join(usermode)
         isoper = 'o' in usermode
 
@@ -339,9 +347,10 @@ class Channel(object):
 
     def remove_user(self, user, reason):
         assert self.registered
-        if not user in self.users:
-            log.warn("User %s not on channel %s, cannot remove" %
-                     (user.nick, self.name))
+        if user not in self.users:
+            log.warn(
+                "User %s not on channel %s, cannot remove" % (
+                    user.nick, self.name))
         log.debug("%s removed %s for %s" % (self.name, user.nick, reason))
         if reason:
             reason = ', ' + reason
