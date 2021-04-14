@@ -1,22 +1,27 @@
 
 class ConstructLevel(object):
-	__slots__=()
+    __slots__ = ()
+
 
 class GuestLevel(ConstructLevel):
-	def __str__(self):
-		return "guest"
+    def __str__(self):
+        return "guest"
+
 
 class RegisteredLevel(ConstructLevel):
-	def __str__(self):
-		return "registered"
+    def __str__(self):
+        return "registered"
+
 
 class ConfirmedLevel(ConstructLevel):
-	def __str__(self):
-		return "confirmed"
+    def __str__(self):
+        return "confirmed"
+
 
 class OperLevel(ConstructLevel):
-	def __str__(self):
-		return "server operator"
+    def __str__(self):
+        return "server operator"
+
 
 # for profile's
 guestlevel = GuestLevel()
@@ -28,4 +33,3 @@ operlevel = OperLevel()
 banrole = object()
 allowrole = object()
 operrole = object()
-
