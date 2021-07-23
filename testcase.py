@@ -7,7 +7,6 @@ import _thread
 import time
 import sys
 import queue
-import os
 
 server = (b'127.0.0.1', 6667)
 
@@ -16,12 +15,14 @@ ServerLine = namedtuple("ServerLine", "from_ to origin what remainder")
 
 def create_serverline(from_=None, to=None, what=None, remainder=None):
     return ServerLine(
-        from_=from_, to=to, origin=LineOrigin.SERVER, what=what, remainder=remainder)
+        from_=from_, to=to, origin=LineOrigin.SERVER, what=what,
+        remainder=remainder)
 
 
 def create_userline(from_=None, to=None, what=None, remainder=None):
     return ServerLine(
-        from_=from_, to=to, origin=LineOrigin.USER, what=what, remainder=remainder)
+        from_=from_, to=to, origin=LineOrigin.USER, what=what,
+        remainder=remainder)
 
 
 def to_bytes(line, check=False):
@@ -69,8 +70,10 @@ class TestUser(object):
 
     def send(self, line):
         assert isinstance(line, bytes)
-        self.print_tee("<- %s: %s" % (self.nick.decode("ascii", errors="replace"),
-                                      line.decode("ascii", errors="replace")))
+        self.print_tee(
+            "<- %s: %s" %
+            (self.nick.decode("ascii", errors="replace"),
+             line.decode("ascii", errors="replace")))
         self.socket.send(line + b'\n')
 
     def recv_threat(self, q):
@@ -100,7 +103,6 @@ class TestUser(object):
 
     def parse_serverline(self, line):
         assert isinstance(line, bytes)
-        print("XXXXXX", repr(line))
         if line.startswith(b":"):
             from_, line = line.split(b" ", 1)
             from_ = from_[1:]
@@ -201,8 +203,10 @@ class TestUser(object):
                 traceback.print_exception(
                     lin[0], lin[1], lin[2], file=self.out)
 
-            self.print_tee("-> %s: %s " % (self.nick.decode("ascii", errors="replace"),
-                                           lin.decode("ascii", errors="replace")))
+            self.print_tee(
+                "-> %s: %s " %
+                (self.nick.decode("ascii", errors="replace"),
+                 lin.decode("ascii", errors="replace")))
 
             try:
                 lin = self.parse_serverline(lin)
@@ -259,16 +263,21 @@ class TestUser(object):
                 remainder=b"",),)
 
     def part(self, channel):
-        assert isinstance(channel, str)
+        channel = to_bytes(channel)
         self.svrcmd(
-            b"PART %s" % to_bytes(channel),
+            b"PART %s" % channel,
             expected_result=create_userline(
-                from_=self.nick, to=b"#soonempty", what=b"PART", remainder=b""),)
+                from_=self.nick, to=channel, what=b"PART", remainder=b""),)
 
-    def kick(self, channel, who):
-        assert isinstance(channel, str)
+    def kick(self, channel, who, reason=b"just because"):
+        channel = to_bytes(channel)
         assert isinstance(who, bytes)
-        self.sendcmd(b"KICK %s :%s" % (to_bytes(channel), who))
+        whoreason = b"%s :%s" % (who, reason)
+        self.svrcmd(
+            b"KICK %s %s" % (channel, whoreason),
+            expected_result=create_userline(
+                from_=self.nick, to=channel, what=b"KICK", remainder=whoreason
+            ))
 
     def chanmode(self, channel, modechange, ignore_result=False):
         self.clearlines()
@@ -279,8 +288,9 @@ class TestUser(object):
             def match_remainder(x):
                 return x.strip(b" ") == modechange
 
-            expected_result = create_userline(from_=self.nick, to=channel,
-                                              what=b"MODE", remainder=match_remainder)
+            expected_result = create_userline(
+                from_=self.nick, to=channel, what=b"MODE",
+                remainder=match_remainder)
         self.svrcmd(b"MODE %s %s" % (channel, modechange),
                     expected_result=expected_result)
 
@@ -289,14 +299,13 @@ class TestUser(object):
         who = to_bytes(who, check=True)
         modechange = to_bytes(modechange)
         self.clearlines()
-        self.svrcmd(b"MODE %s %s %s" % (channel, modechange, who),
-                    create_userline(from_=self.nick, to=channel,
-                                    what=b"MODE", remainder=b"%s %s" % (modechange, who)))
+        self.svrcmd(
+            b"MODE %s %s %s" % (channel, modechange, who),
+            create_userline(
+                from_=self.nick, to=channel, what=b"MODE", remainder=b"%s %s" %
+                (modechange, who)))
 
     def clearlines(self):
-        for line in self.lines:
-            print("XXXXX clearlines erasing: %s" % (line,))
-
         self.lines = []
 
     def svrcmd(self, rawcmd, expected_result):
@@ -308,7 +317,6 @@ class TestUser(object):
     def cmd(self, cmd, expected_result):
         """ send a command to construct """
         assert isinstance(cmd, str)
-        print("XXXXX" * 10 + "testcase using " + cmd)
         self.clearlines()
         to = b"construct"
         # if specify_server:
@@ -403,7 +411,8 @@ class TestUser(object):
     #         else:
     #             self.servername = mob.group(1)
     #             print(
-    #                 "server name is %s" % self.servername.decode("ascii"), file=self.out
+    #                 "server name is %s" % self.servername.decode("ascii"),
+    #                 file=self.out
     #             )
     #         if cmd != mob.group(2):
     #             print(
@@ -439,23 +448,25 @@ if __name__ == "__main__":
     for olduser in ("chanoper", "allowed", "banned"):
         serveroper.cmd(
             "unregister " + olduser,
-            expected_result=["OK", "No profile found for " % s"" % olduser],)
+            expected_result=["OK", "No profile found for '%s'" % olduser])
     serveroper.cmd(
         "channel unregister #testchan",
-        expected_result=["OK", "unknown channel "  # testchan""],)
+        expected_result=["OK", "unknown channel '#testchan'"]
+    )
 
     serveroper.cmd(
         "id serveroperpass",
         expected_result="already identified as serveroper",)
     serveroper.cmd(
-        "reid serveroperpass", expected_result="Successfully identified as serveroper")
+        "reid serveroperpass",
+        expected_result="Successfully identified as serveroper")
 
     # if this fails you might need to tweak throttle_time in your ircd.conf
-    chanoper=TestUser(b"cHanoper", b"chanoper1", b"ChanOper").connect()
-    guest=TestUser(b"gUest", b"guest1", b"Guest").connect()
-    allowed=TestUser(b"aLlowed", b"allowed1", b"Allowed").connect()
-    banned=TestUser(b"bAnned", b"banned1", b"Banned").connect()
-    everyone=[serveroper, chanoper, guest, allowed, banned]
+    chanoper = TestUser(b"cHanoper", b"chanoper1", b"ChanOper").connect()
+    guest = TestUser(b"gUest", b"guest1", b"Guest").connect()
+    allowed = TestUser(b"aLlowed", b"allowed1", b"Allowed").connect()
+    banned = TestUser(b"bAnned", b"banned1", b"Banned").connect()
+    everyone = [serveroper, chanoper, guest, allowed, banned]
 
     serveroper.join("#soonempty")
     serveroper.part("#soonempty")
@@ -487,10 +498,10 @@ if __name__ == "__main__":
     chanoper.recv("OK")
 
     # ghost chanoper by re-login using same account
-    chanoper2=TestUser(b"chAnoper_", b"chanoper2", b"ChanOper").connect()
+    chanoper2 = TestUser(b"chAnoper_", b"chanoper2", b"ChanOper").connect()
     chanoper2.cmd("id chanoper chanoperpass", expected_result="OK")
     everyone.append(chanoper2)
-    chanoper=chanoper2
+    chanoper = chanoper2
     chanoper.nickchange(b"cHanoper")
     chanoper.cmd("whoami", expected_result=None)
     chanoper.recv("You are cHanoper, confirmed, no defined roles on channels")
@@ -526,107 +537,135 @@ if __name__ == "__main__":
         [b"gUest", b"aLlowed", b"bAnned", b"@cHanoper"])
 
     chanoper.usermode("#testchan", allowed.nick, "+o")
-    # chanoper.cmd("channel roles #testchan", expected_result=None)
-    chanoper.recv("- aLlowed oper")
+    chanoper.cmd("channel roles #testchan", expected_result=None)
+    chanoper.recv("- aLlowed oper (online)")
     chanoper.recv("total 2 role(s) defined for #testchan")
-    # lijkt er op dat de "+o" niet aan komt bij construct
-    sys.exit(1)
     chanoper.usermode("#testchan", allowed.nick, "+m-o")
-    allowed.wait_for_line(
-        ":cHanoper!chanoper2@127.0.0.1 MODE #testchan +m-o aLlowed")
-    chanoper.cmd("channel roles #testchan", True)
-    chanoper.wait_for_line(
-        ":construct!-@- NOTICE cHanoper :total 1 role(s) defined for #testchan")
+    chanoper.cmd(
+        "channel roles #testchan",
+        expected_result="total 1 role(s) defined for #testchan")
 
     chanoper.part('#testchan')
     chanoper.join('#testchan')
-    chanoper.wait_for_line(":construct!-@- MODE #testchan +o cHanoper")
+    chanoper.recv(
+        create_userline(
+            from_=b'construct', to=b'#testchan', what=b'MODE',
+            remainder=b'+o ' + chanoper.nick))
+
     assert chanoper.names('#testchan') == set(
-        ['gUest', 'aLlowed', 'bAnned', '@cHanoper'])
+        [b'gUest', b'aLlowed', b'bAnned', b'@cHanoper'])
 
     chanoper.kick('#testchan', chanoper.nick)
     chanoper.join('#testchan')
 
-    chanoper.cmd("channel guests #testchan deny")
-    guest.wait_for_line(
-        ":construct!-@- KICK #testchan gUest :Restricted channel")
-    chanoper.wait_for_line(
-        ":construct!-@- KICK #testchan gUest :Restricted channel")
+    # test disallowing guests
+    chanoper.cmd("channel guests #testchan deny", expected_result="OK")
+    kickresp = create_userline(
+        from_=b'construct', to=b'#testchan', what=b'KICK',
+        remainder=b'gUest :Restricted channel, guests not allowed')
+    guest.recv(kickresp)
+    chanoper.recv(kickresp)
+
     guest.join('#testchan')
-    guest.wait_for_line(
-        ":construct!-@- KICK #testchan gUest :Restricted channel")
-    chanoper.wait_for_line(
-        ":construct!-@- KICK #testchan gUest :Restricted channel")
+    guest.recv(kickresp)
+    chanoper.recv(kickresp)
 
-    chanoper.cmd("channel ban #testchan banned")
-    banned.wait_for_line(
-        ":construct!-@- KICK #testchan bAnned :Restricted channel")
-    chanoper.wait_for_line(
-        ":construct!-@- KICK #testchan bAnned :Restricted channel")
+    # test banning users
+    chanoper.cmd("channel ban #testchan banned", expected_result="OK")
+    banresp = create_userline(
+        from_=b'construct', to=b'#testchan', what=b'KICK',
+        remainder=banned.nick + b' :Restricted channel, user not allowed')
+    banned.recv(banresp)
+    chanoper.recv(banresp)
+
     banned.join('#testchan')
-    banned.wait_for_line(
-        ":construct!-@- KICK #testchan bAnned :Restricted channel")
-    chanoper.wait_for_line(
-        ":construct!-@- KICK #testchan bAnned :Restricted channel")
+    banned.recv(banresp)
+    chanoper.recv(banresp)
 
-    chanoper.cmd("channel policy #testchan deny")
-    allowed.wait_for_line(
-        ":construct!-@- KICK #testchan aLlowed :Restricted channel")
-    chanoper.wait_for_line(
-        ":construct!-@- KICK #testchan aLlowed :Restricted channel")
-    assert chanoper.names('#testchan') == set(['@cHanoper'])
-    chanoper.cmd("channel allow #testchan allowed")
+    # switch policy to deny
+    chanoper.cmd("channel policy #testchan deny", expected_result="OK")
+    restrictedresp = create_userline(
+        from_=b'construct', to=b'#testchan', what=b'KICK',
+        remainder=allowed.nick + b' :Restricted channel, user not allowed')
+    allowed.recv(restrictedresp)
+    chanoper.recv(restrictedresp)
+    assert chanoper.names('#testchan') == set([b'@cHanoper'])
+
+    chanoper.cmd("channel allow #testchan " + allowed.nick.decode('utf-8'),
+                 expected_result="OK")
     allowed.join('#testchan')
-    chanoper.wait_for_line(":aLlowed!allowed1@127.0.0.1 JOIN :#testchan")
-    assert chanoper.names('#testchan') == set(['@cHanoper', 'aLlowed'])
-    chanoper.cmd("channel oper #testchan allowed")
-    chanoper.cmd("channel allow #testchan chanoper")
-    chanoper.wait_for_line(":construct!-@- MODE #testchan -o cHanoper")
-    serveroper.cmd("whois chanoper")
-    serveroper.wait_for_line(
-        ":construct!-@- NOTICE sErveroper :chanoper is online and confirmed as "
-        "cHanoper, allowed in #testchan")
-    serveroper.cmd("whois allowed")
-    serveroper.wait_for_line(
-        ":construct!-@- NOTICE sErveroper :allowed is online and registered as "
-        "aLlowed, oper in #testchan")
-    serveroper.cmd("whois banned")
-    serveroper.wait_for_line(
-        ":construct!-@- NOTICE sErveroper :banned is online and registered as bAnned, "
-        "banned in #testchan")
-    allowed.cmd("channel reset #testchan chanoper")
+    # race condition here?
+    assert chanoper.names('#testchan') == set([b'@cHanoper', b'aLlowed'])
 
-    serveroper.cmd("list profiles")
-    serveroper.cmd("list channels")
-    serveroper.wait_for_line(
-        ":construct!-@- NOTICE sErveroper :- #testchan 1 users (registered)")
-    serveroper.cmd("channel roles #testchan")
-    chanoper.cmd("channel roles #testchan", True)
-    chanoper.wait_for_line(
-        ":construct!-@- NOTICE cHanoper :'cHanoper' is not a channel operator on "
+    chanoper.cmd(
+        "channel oper #testchan " + allowed.nick.decode('utf-8'),
+        expected_result="OK")
+    chanoper.cmd(
+        "channel allow #testchan " + chanoper.nick.decode('utf-8'),
+        expected_result="OK")
+    chanoper.recv(
+        create_userline(
+            from_=b'construct', to=b'#testchan', what=b'MODE',
+            remainder=b'-o ' + chanoper.nick))
+
+    serveroper.cmd("whois chanoper", expected_result=None)
+    for line in [
+        "chanoper is online and confirmed as cHanoper, allowed in #testchan",
+        "Real name: Channel -Confirmed- Operator",
+        "Email: chanoper@someemail",
+        "OK"
+    ]:
+        serveroper.recv(line)
+
+    serveroper.cmd(
+        "whois allowed",
+        expected_result="allowed is online and registered as aLlowed, "
+        "oper in #testchan")
+    serveroper.cmd(
+        "whois banned",
+        expected_result="banned is online and registered as bAnned, "
+        "banned in #testchan")
+    allowed.cmd("channel reset #testchan chanoper", expected_result="OK")
+
+    serveroper.cmd("list profiles",
+                   expected_result="Total 9 registered profiles")
+    serveroper.cmd("list channels",
+                   expected_result="- #testchan 1 users (registered)")
+    serveroper.cmd(
+        "channel roles #testchan",
+        expected_result="total 2 role(s) defined for #testchan")
+
+    chanoper.cmd(
+        "channel roles #testchan",
+        expected_result="'cHanoper' is not a channel operator on "
         "'#testchan'")
 
-    allowed.cmd("channel roles #testchan")
-    assert allowed.names('#testchan') == set(['@aLlowed'])
+    allowed.cmd(
+        "channel roles #testchan",
+        expected_result="total 2 role(s) defined for #testchan")
+    assert allowed.names('#testchan') == set([b'@aLlowed'])
 
-    allowed.cmd("channel unregister #testchan")
-    serveroper.cmd("list channels")
-    serveroper.wait_for_line(
-        ":construct!-@- NOTICE sErveroper :- #testchan 1 users (not registered)")
+    allowed.cmd("channel unregister #testchan", expected_result="OK")
+    serveroper.cmd(
+        "list channels",
+        expected_result="- #testchan 1 users (not registered)")
 
-    chanoper.cmd("unregister banned aap", True)
-    chanoper.wait_for_line(
-        ":construct!-@- NOTICE cHanoper :You can only unregister your own profile")
-    chanoper.cmd("unregister chanoper", True)
-    chanoper.wait_for_line(
-        ":construct!-@- NOTICE cHanoper :error, invalid password for 'cHanoper'")
-    serveroper.cmd("unregister allowed")
+    chanoper.cmd(
+        "unregister banned aap",
+        expected_result="You can only unregister your own profile")
+    chanoper.cmd(
+        "unregister chanoper",
+        expected_result="error, invalid password for 'cHanoper'")
+    serveroper.cmd("unregister allowed", expected_result="OK")
 
-    serveroper.cmd("kill banned")
+    serveroper.cmd("kill banned", expected_result="OK")
 
-    serveroper.cmd("help")
-    serveroper.cmd("help list channels")
-    serveroper.cmd("unid")
+    serveroper.cmd("help", expected_result="XX")
+    sys.exit(1)
+    serveroper.cmd("help list channels", expected_result="OK")
+    sys.exit(1)
+    serveroper.cmd("unid", expected_result="OK")
+    sys.exit(1)
 
     print()
     print("---------------end---------------------")
@@ -636,14 +675,14 @@ if __name__ == "__main__":
     for u in everyone:
         u.wait()
     sys.exit(0)
-    user2=TestUser("user2", "testuser2", "TestUser2")
+    user2 = TestUser("user2", "testuser2", "TestUser2")
     user2.wait_for_line(":sin 001")
     user2.msg("construct", "register otherpass")
 
     time.sleep(0.5)
     print("-----------------------")
 
-    user1=TestUser("user1", "testuser1", "TestUser1")
+    user1 = TestUser("user1", "testuser1", "TestUser1")
     user1.wait_for_line(":sin 001")
     user1.msg(user2.nick, "hoi! ik ben er ook!")
     user1.msg("construct", "identify mypass")
@@ -662,7 +701,7 @@ if __name__ == "__main__":
 
 
 def test_parse_serverline():
-    testlines=(
+    testlines = (
         (
             b":wry.test NOTICE * :*** No Ident response",
             create_serverline(
@@ -672,7 +711,8 @@ def test_parse_serverline():
                 remainder=b"*** No Ident response",),),
         # b":wry.test NOTICE * :*** Found your hostname",
         # b":wry.test NOTICE bAnned :*** You are exempt from flood protection",
-        # b":wry.test 001 bAnned :Welcome to the mynet Internet Relay Chat Network bAnned!banned1@luckybargee.space",
+        # b":wry.test 001 bAnned :Welcome to the mynet Internet Relay Chat Network "
+        #  b"bAnned!banned1@luckybargee.space",
         (
             b":construct!construct@test.local NOTICE sErveroper :sErver..",
             create_userline(
@@ -702,7 +742,7 @@ def test_parse_serverline():
                 remainder=b"wry.test hybrid-1:8.2.26+dfsg.1-1 y T bh",),),)
     for tline, exp in testlines:
         print("expect:", exp)
-        tu=TestUser(b"", b"", b"")
-        out=tu.parse_serverline(tline)
+        tu = TestUser(b"", b"", b"")
+        out = tu.parse_serverline(tline)
         print("got:   ", out)
         assert out == exp

@@ -22,6 +22,7 @@ killre = compile_spaced(r':\S+ KILL (\S+) :(.*)')
 uidre = compile_spaced(
     r':(\S+) UID (\S+) \d+ \d+ \S+ (\S+) \S+ \S+ (\S+) \S+ :.*')
 nickchangere = compile_spaced(r':(\S+) NICK (\S+) :\d+')
+joinre = compile_spaced(r':(\S+) JOIN \d+ (#\S+) (\+)')
 sjoinre = compile_spaced(r':\S+ SJOIN \d+ (#\S+) \+[a-z]* :(.*)')
 partre = compile_spaced(r':(\S+) PART (\S+)')
 kickre = compile_spaced(r':\S+ KICK (\S+) (\S+) :(.*)')
@@ -29,12 +30,13 @@ kickre = compile_spaced(r':\S+ KICK (\S+) (\S+) :(.*)')
 usermodere = compile_spaced(
     r':(\S+) TMODE \d+ (\S+) ((?:[-+]\S+)+) (\S+(?: \S+)*)')
 serverusermodere = compile_spaced(r':\S+ MODE (\S+) :([-+]\S+)')
-chanmodere = compile_spaced(r':(\S+) MODE (\S+) ([-+]\S+)')
+chanmodere = compile_spaced(r':(\S+) TMODE \d+ (\S+) ([-+]\S+)')
 quitre = compile_spaced(r':(\S+) QUIT :(.*)')
 privmsgre = compile_spaced(r':(\S+) PRIVMSG (\S+) :(.*)')
 topicre = compile_spaced(r':(\S+) TOPIC (\S+) (.*)')
 awayre = compile_spaced(r':(\S+) AWAY(.*)')
 noticere = compile_spaced(r':(\S+) NOTICE (\S+) :(.*)')
+
 
 # remote_serverid_re = compile_spaced(r"^:(\S+) (.*)")
 
@@ -114,6 +116,7 @@ class ServerHandler(object):
             (killre, self.msg_kill),
             (uidre, self.msg_uid),
             (nickchangere, self.msg_nickchange),
+            (joinre, self.msg_join),
             (sjoinre, self.msg_sjoin),
             (partre, self.msg_part),
             (kickre, self.msg_kick),
@@ -198,6 +201,13 @@ class ServerHandler(object):
         user.nickchange(newnick)
         self.core.channels.fix_user_on_all_channels(user)
 
+    def msg_join(self, uid, channame, mode):
+        chan = self.core.channels.get_or_create_channel(channame)
+        user = self.core.users.get_user_by_uid(uid)
+        if not user:
+            raise OperMsgException("joining user %s does not exist" % uid)
+        chan.join(user, mode)
+
     def msg_sjoin(self, channame, uids):
         chan = self.core.channels.get_or_create_channel(channame)
         for uid in uids.split():
@@ -224,15 +234,15 @@ class ServerHandler(object):
             raise OperMsgException("parting user %s does not exist" % uid)
         chan.part(user)
 
-    def msg_kick(self, channame, nick, reason):
+    def msg_kick(self, channame, uid, reason):
         chan = self.core.channels.get_channel(channame)
         if not chan:
             raise OperMsgException(
                 "no such channel '%s' where user %s is kicked from" % (
-                    channame, nick))
-        user = self.core.users.get_user(nick)
+                    channame, uid))
+        user = self.core.users.get_user_by_uid(uid)
         if not user:
-            raise OperMsgException("parting user %s does not exist" % nick)
+            raise OperMsgException("parting user %s does not exist" % uid)
         chan.kick(user)
 
     def msg_usermode(self, chanoper, channame, modechange, nicks):
